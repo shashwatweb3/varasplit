@@ -1,0 +1,66 @@
+type GroupView = struct {
+  id: u64,
+  name: str,
+  members: vec actor_id,
+  balances: vec MemberBalance,
+  expenses: vec Expense,
+};
+
+type MemberBalance = struct {
+  member: actor_id,
+  balance: i128,
+};
+
+type Expense = struct {
+  payer: actor_id,
+  amount: u128,
+  share_per_member: u128,
+  remainder: u128,
+  description: str,
+  created_at: u64,
+};
+
+type GroupSettlement = struct {
+  group_id: u64,
+  transfers: vec SettlementTransfer,
+  total_settled: u128,
+};
+
+type SettlementTransfer = struct {
+  from: actor_id,
+  to: actor_id,
+  amount: u128,
+};
+
+constructor {
+  Create : ();
+};
+
+service VaraSplit {
+  AddExpense : (group_id: u64, payer: actor_id, amount: u128, description: str) -> GroupView;
+  CreateGroup : (name: str, members: vec actor_id) -> GroupView;
+  SettleGroup : (group_id: u64) -> GroupSettlement;
+  query GetBalances : (group_id: u64) -> vec MemberBalance;
+  query GetGroup : (group_id: u64) -> GroupView;
+  query GetSettlementPlan : (group_id: u64) -> vec SettlementTransfer;
+
+  events {
+    GroupCreated: struct {
+      group_id: u64,
+      name: str,
+      members: vec actor_id,
+    };
+    ExpenseAdded: struct {
+      group_id: u64,
+      payer: actor_id,
+      amount: u128,
+      description: str,
+    };
+    GroupSettled: struct {
+      group_id: u64,
+      transfers: vec SettlementTransfer,
+      total_settled: u128,
+    };
+  }
+};
+
