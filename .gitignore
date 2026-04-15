@@ -3,3 +3,6 @@
 .vscode
 .idea
 /target
+frontend/.next/
+frontend/node_modules/
+*.log

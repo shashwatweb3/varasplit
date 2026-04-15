@@ -1,8 +1,3 @@
 {
-  "/page": "app/page.js",
-  "/work-payouts/create/page": "app/work-payouts/create/page.js",
-  "/work-payouts/page": "app/work-payouts/page.js",
-  "/create/page": "app/create/page.js",
-  "/group/[id]/page": "app/group/[id]/page.js",
-  "/invoice/[token]/page": "app/invoice/[token]/page.js"
+  "/page": "app/page.js"
 }
