@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { getGroup, getInvoice, getInvoiceByToken, getSettlementPlan } from './adapter';
+import { getGroup, getInvoice, getInvoiceByToken } from './adapter';
 import { getDebtors } from './derived';
 import { addressesEqual, formatTvara } from './format';
 import { getKnownRecordCount, loadRecentGroups, loadRecentWorkPayouts, saveRecentGroup, saveRecentWorkPayout } from './storage';
@@ -15,8 +15,11 @@ export const ACTION_CENTER_REFRESH_EVENT = 'varasplit:action-center-refresh';
 
 const READ_ACTIONS_KEY = 'varasplit.action-center.read';
 const POLL_MS = 20_000;
-const MAX_CONTRACT_DISCOVERY_ID = 100;
-const DISCOVERY_BATCH_SIZE = 10;
+const SESSION_CACHE_TTL_MS = 30_000;
+const RECENT_RECORD_LIMIT = 20;
+const FALLBACK_DISCOVERY_MAX_ID = 100;
+const FALLBACK_DISCOVERY_LIMIT = 12;
+const DISCOVERY_BATCH_SIZE = 6;
 
 export type ActionItemType =
   | 'group_pay'
@@ -56,12 +59,30 @@ interface ActionSnapshot {
   contractDiscoveryComplete: boolean;
 }
 
+interface WalletIndexedRecordIds {
+  groupIds: number[];
+  payoutIds: number[];
+}
+
+interface ActionCacheEntry {
+  snapshot: ActionSnapshot;
+  updatedAt: number;
+}
+
+interface InFlightRefresh {
+  promise: Promise<ActionSnapshot>;
+  listeners: Set<(snapshot: ActionSnapshot) => void>;
+}
+
 const emptyCounts: ActionCounts = {
   pendingGroups: 0,
   pendingWork: 0,
   pending: 0,
   proofReady: 0,
 };
+
+const actionCenterCache = new Map<string, ActionCacheEntry>();
+const inFlightRefreshes = new Map<string, InFlightRefresh>();
 
 function readIds() {
   if (typeof window === 'undefined') return new Set<string>();
@@ -97,26 +118,53 @@ function parseRouteId(value: string | undefined) {
   return BigInt(value);
 }
 
-function getContractDiscoveryIds(localIds: number[]) {
-  const ids = new Set<number>();
-
-  for (let id = 1; id <= MAX_CONTRACT_DISCOVERY_ID; id += 1) {
-    ids.add(id);
-  }
-
-  localIds.forEach((id) => {
-    if (Number.isSafeInteger(id) && id > 0) {
-      ids.add(id);
-    }
-  });
-
-  return [...ids].sort((a, b) => a - b);
+function getActionCenterCacheKey(account: WalletAccount) {
+  return account.address;
 }
 
-async function forEachInBatches<T>(items: T[], batchSize: number, handler: (item: T) => Promise<void>) {
+function getCachedSnapshot(account: WalletAccount) {
+  return actionCenterCache.get(getActionCenterCacheKey(account)) ?? null;
+}
+
+function isFreshCache(entry: ActionCacheEntry) {
+  return Date.now() - entry.updatedAt < SESSION_CACHE_TTL_MS;
+}
+
+async function getWalletIndexedRecordIds(_account: WalletAccount): Promise<WalletIndexedRecordIds | null> {
+  void _account;
+  return null;
+}
+
+function getContractDiscoveryIds(localIds: number[]) {
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  const addId = (id: number) => {
+    if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+
+  for (const id of localIds.slice(0, RECENT_RECORD_LIMIT)) {
+    addId(id);
+  }
+
+  for (let id = FALLBACK_DISCOVERY_MAX_ID; id > Math.max(0, FALLBACK_DISCOVERY_MAX_ID - FALLBACK_DISCOVERY_LIMIT); id -= 1) {
+    addId(id);
+  }
+
+  return ids;
+}
+
+async function forEachInBatches<T>(
+  items: T[],
+  batchSize: number,
+  handler: (item: T) => Promise<void>,
+  afterBatch?: () => void,
+) {
   for (let index = 0; index < items.length; index += batchSize) {
     const batch = items.slice(index, index + batchSize);
     await Promise.all(batch.map(handler));
+    afterBatch?.();
   }
 }
 
@@ -158,7 +206,27 @@ async function primeKnownRecordsFromPathname(pathname: string | null) {
   return false;
 }
 
-async function buildItems(account: WalletAccount, read: Set<string>): Promise<ActionSnapshot> {
+function createSnapshot(
+  items: ActionItem[],
+  knownRecordCount: number,
+  checkedRecordCount: number,
+  scannedRecordCount: number,
+  contractDiscoveryComplete: boolean,
+): ActionSnapshot {
+  return {
+    items: [...items].sort((a, b) => b.priority - a.priority || b.createdAt - a.createdAt).slice(0, 30),
+    knownRecordCount,
+    checkedRecordCount,
+    scannedRecordCount,
+    contractDiscoveryComplete,
+  };
+}
+
+async function buildItems(
+  account: WalletAccount,
+  read: Set<string>,
+  onProgress?: (snapshot: ActionSnapshot) => void,
+): Promise<ActionSnapshot> {
   const items: ActionItem[] = [];
   let checkedRecordCount = 0;
   let knownRecordCount = 0;
@@ -167,11 +235,17 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
   const recentPayouts = loadRecentWorkPayouts();
   const recentGroupById = new Map(recentGroups.map((recent) => [recent.id, recent]));
   const recentPayoutById = new Map(recentPayouts.map((recent) => [recent.id, recent]));
-  const groupIds = getContractDiscoveryIds(recentGroups.map((recent) => recent.id));
-  const payoutIds = getContractDiscoveryIds(recentPayouts.map((recent) => recent.id));
+  const walletIndexedIds = await getWalletIndexedRecordIds(account).catch(() => null);
+  const groupIds = walletIndexedIds?.groupIds.slice(0, RECENT_RECORD_LIMIT) ?? getContractDiscoveryIds(recentGroups.map((recent) => recent.id));
+  const payoutIds = walletIndexedIds?.payoutIds.slice(0, RECENT_RECORD_LIMIT) ?? getContractDiscoveryIds(recentPayouts.map((recent) => recent.id));
   const scannedRecordCount = groupIds.length + payoutIds.length;
 
-  await forEachInBatches(
+  const publishProgress = () => {
+    onProgress?.(createSnapshot(items, knownRecordCount, checkedRecordCount, scannedRecordCount, false));
+  };
+
+  await Promise.all([
+    forEachInBatches(
     groupIds,
     DISCOVERY_BATCH_SIZE,
     async (id) => {
@@ -189,12 +263,13 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
         const groupName = group.name || recent?.name || `Group #${group.id.toString()}`;
         saveRecentGroup(Number(group.id), groupName, { silent: true });
 
-        const plan = await getSettlementPlan(groupId).catch(() => []);
         let proof: InvoiceNft | null = null;
-        try {
-          proof = await getInvoice(groupId);
-        } catch {
-          proof = null;
+        if (group.settled) {
+          try {
+            proof = await getInvoice(groupId);
+          } catch {
+            proof = null;
+          }
         }
 
         if (proof) {
@@ -231,6 +306,7 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
           return;
         }
 
+        const plan = group.settlementPlan;
         const debtor = getDebtors(group, plan).find((entry) => addressesEqual(entry.address, account.address));
         if (debtor && debtor.remaining > BigInt(0)) {
           const id = `group_pay:${group.id.toString()}:${debtor.remaining.toString()}`;
@@ -284,9 +360,10 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
         return;
       }
     },
-  );
+    publishProgress,
+    ),
 
-  await forEachInBatches(
+    forEachInBatches(
     payoutIds,
     DISCOVERY_BATCH_SIZE,
     async (id) => {
@@ -304,10 +381,12 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
         saveRecentWorkPayout(Number(payout.id), payout.title || recent?.title, { silent: true });
 
         let proof: ProofInvoice | null = null;
-        try {
-          proof = await getProof(payoutId);
-        } catch {
-          proof = null;
+        if (payout.completed && payout.proofTokenId != null) {
+          try {
+            proof = await getProof(payoutId);
+          } catch {
+            proof = null;
+          }
         }
 
         if (proof) {
@@ -379,15 +458,45 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
         return;
       }
     },
-  );
+    publishProgress,
+    ),
+  ]);
 
-  return {
-    items: items.sort((a, b) => b.priority - a.priority || b.createdAt - a.createdAt).slice(0, 30),
-    knownRecordCount,
-    checkedRecordCount,
-    scannedRecordCount,
-    contractDiscoveryComplete: true,
-  };
+  return createSnapshot(items, knownRecordCount, checkedRecordCount, scannedRecordCount, true);
+}
+
+async function loadActionSnapshot(
+  account: WalletAccount,
+  read: Set<string>,
+  onProgress?: (snapshot: ActionSnapshot) => void,
+) {
+  const cacheKey = getActionCenterCacheKey(account);
+  const existing = inFlightRefreshes.get(cacheKey);
+  if (existing) {
+    if (onProgress) existing.listeners.add(onProgress);
+    try {
+      return await existing.promise;
+    } finally {
+      if (onProgress) existing.listeners.delete(onProgress);
+    }
+  }
+
+  const listeners = new Set<(snapshot: ActionSnapshot) => void>();
+  if (onProgress) listeners.add(onProgress);
+
+  const promise = buildItems(account, read, (snapshot) => {
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  }).then((snapshot) => {
+    actionCenterCache.set(cacheKey, { snapshot, updatedAt: Date.now() });
+    return snapshot;
+  }).finally(() => {
+    inFlightRefreshes.delete(cacheKey);
+  });
+
+  inFlightRefreshes.set(cacheKey, { promise, listeners });
+  return promise;
 }
 
 function countsFor(items: ActionItem[]): ActionCounts {
@@ -419,8 +528,17 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
+  const activeAccountKey = useRef<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const applySnapshot = useCallback((snapshot: ActionSnapshot) => {
+    setItems(snapshot.items);
+    setKnownRecordCount(snapshot.knownRecordCount);
+    setCheckedRecordCount(snapshot.checkedRecordCount);
+    setScannedRecordCount(snapshot.scannedRecordCount);
+    setContractDiscoveryComplete(snapshot.contractDiscoveryComplete);
+  }, []);
+
+  const runRefresh = useCallback(async (options?: { force?: boolean; background?: boolean }) => {
     const currentRequest = requestId.current + 1;
     requestId.current = currentRequest;
 
@@ -435,16 +553,39 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
       return;
     }
 
-    setLoading(true);
+    const accountKey = getActionCenterCacheKey(account);
+    const cached = getCachedSnapshot(account);
+    const hasUsableCache = cached && (options?.force ? true : isFreshCache(cached));
+    const accountChanged = activeAccountKey.current !== accountKey;
+
+    if (cached) {
+      activeAccountKey.current = accountKey;
+      applySnapshot(cached.snapshot);
+    } else if (accountChanged) {
+      activeAccountKey.current = accountKey;
+      setItems([]);
+      setKnownRecordCount(getKnownRecordCount());
+      setCheckedRecordCount(0);
+      setScannedRecordCount(0);
+      setContractDiscoveryComplete(false);
+    }
+
+    if (hasUsableCache && !options?.force) {
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(!cached || !options?.background);
     setError(null);
     try {
-      const snapshot = await buildItems(account, readIds());
+      const snapshot = await loadActionSnapshot(account, readIds(), (progressSnapshot) => {
+        if (requestId.current === currentRequest) {
+          applySnapshot(progressSnapshot);
+        }
+      });
       if (requestId.current === currentRequest) {
-        setItems(snapshot.items);
-        setKnownRecordCount(snapshot.knownRecordCount);
-        setCheckedRecordCount(snapshot.checkedRecordCount);
-        setScannedRecordCount(snapshot.scannedRecordCount);
-        setContractDiscoveryComplete(snapshot.contractDiscoveryComplete);
+        applySnapshot(snapshot);
       }
     } catch (err) {
       if (requestId.current === currentRequest) {
@@ -456,7 +597,9 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
         setLoading(false);
       }
     }
-  }, [account]);
+  }, [account, applySnapshot]);
+
+  const refresh = useCallback(() => runRefresh({ force: true }), [runRefresh]);
 
   const markRead = useCallback((id: string) => {
     const read = readIds();
@@ -471,33 +614,36 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
     primeKnownRecordsFromPathname(pathname)
       .catch(() => false)
       .finally(() => {
-        if (!cancelled) refresh();
+        if (!cancelled) runRefresh({ force: true, background: true });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [refresh, pathname]);
+  }, [runRefresh, pathname]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleRefresh = () => {
-      refresh().catch(() => null);
+      runRefresh({ force: true, background: true }).catch(() => null);
     };
     const handleFocus = () => {
-      refresh().catch(() => null);
+      runRefresh({ background: true }).catch(() => null);
+    };
+    const handlePoll = () => {
+      runRefresh({ background: true }).catch(() => null);
     };
     const handleStorage = (event: StorageEvent) => {
       if (!event.key || event.key.startsWith('varasplit.')) {
-        refresh().catch(() => null);
+        runRefresh({ force: true, background: true }).catch(() => null);
       }
     };
 
     window.addEventListener(ACTION_CENTER_REFRESH_EVENT, handleRefresh);
     window.addEventListener('focus', handleFocus);
     window.addEventListener('storage', handleStorage);
-    const interval = window.setInterval(handleRefresh, POLL_MS);
+    const interval = window.setInterval(handlePoll, POLL_MS);
 
     return () => {
       window.removeEventListener(ACTION_CENTER_REFRESH_EVENT, handleRefresh);
@@ -505,7 +651,7 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
       window.removeEventListener('storage', handleStorage);
       window.clearInterval(interval);
     };
-  }, [refresh]);
+  }, [runRefresh]);
 
   const unreadCount = useMemo(() => items.filter((item) => item.unread).length, [items]);
   const counts = useMemo(() => countsFor(items), [items]);

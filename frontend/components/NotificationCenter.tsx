@@ -27,17 +27,22 @@ export function NotificationCenter() {
     markRead,
     hasKnownRecords,
     hasCheckedKnownRecords,
+    checkedRecordCount,
+    scannedRecordCount,
   } = useActionCenter(wallet.selectedAccount);
   const itemCount = actionItems.length;
+  const progressCopy = scannedRecordCount > 0
+    ? `Loaded ${checkedRecordCount} of ${scannedRecordCount} recent records.`
+    : 'Loading recent records from the contract.';
   const emptyTitle = loading
-    ? 'Checking contract records'
+    ? 'Loading recent actions'
     : hasCheckedKnownRecords
       ? 'You’re all caught up'
       : hasKnownRecords
         ? 'Checking known records'
         : 'No known actions yet';
   const emptyCopy = loading
-    ? 'Reading contract records for your connected wallet.'
+    ? progressCopy
     : hasCheckedKnownRecords
       ? 'No pending actions right now. Proof-ready records appear here automatically.'
       : hasKnownRecords
