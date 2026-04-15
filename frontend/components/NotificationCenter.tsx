@@ -18,8 +18,27 @@ function iconTone(type: string) {
 export function NotificationCenter() {
   const wallet = useWallet();
   const [open, setOpen] = useState(false);
-  const { items: actionItems, unreadCount, loading, error, refresh, markRead } = useActionCenter(wallet.selectedAccount);
+  const {
+    items: actionItems,
+    unreadCount,
+    loading,
+    error,
+    refresh,
+    markRead,
+    hasKnownRecords,
+    hasCheckedKnownRecords,
+  } = useActionCenter(wallet.selectedAccount);
   const itemCount = actionItems.length;
+  const emptyTitle = hasKnownRecords
+    ? hasCheckedKnownRecords
+      ? 'You’re all caught up'
+      : 'Checking known records'
+    : 'No known actions yet';
+  const emptyCopy = hasKnownRecords
+    ? hasCheckedKnownRecords
+      ? 'No pending actions right now. Proof-ready records appear here automatically.'
+      : 'Open one of your recent records again if this does not update.'
+    : 'Open a group or payout to track it here. Your recent records will appear automatically once opened.';
 
   if (!wallet.isConnected) return null;
 
@@ -58,7 +77,7 @@ export function NotificationCenter() {
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#69f5c7]">Action center</p>
                 <h3 className="mt-1 text-xl font-black text-[#ecfff7]">
-                  {itemCount > 0 ? `${itemCount} record${itemCount === 1 ? '' : 's'} to review` : 'You’re all caught up'}
+                  {itemCount > 0 ? `${itemCount} record${itemCount === 1 ? '' : 's'} to review` : emptyTitle}
                 </h3>
                 {unreadCount > 0 ? <p className="mt-1 text-xs text-[rgba(236,255,247,0.6)]">{unreadCount} new since you last opened them</p> : null}
               </div>
@@ -112,8 +131,8 @@ export function NotificationCenter() {
 
               {!actionItems.length && !error ? (
                 <div className="rounded-[22px] border border-[#70ffc4]/12 bg-[#07110d]/72 p-4 text-sm leading-6 text-[rgba(236,255,247,0.72)]">
-                  <span className="block text-base font-black text-[#ecfff7]">You’re all caught up</span>
-                  <span className="mt-1 block">No pending actions right now. Proof-ready records appear here automatically.</span>
+                  <span className="block text-base font-black text-[#ecfff7]">{emptyTitle}</span>
+                  <span className="mt-1 block">{emptyCopy}</span>
                 </div>
               ) : null}
             </div>

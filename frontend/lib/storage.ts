@@ -118,6 +118,10 @@ export function loadRecentWorkPayouts(): RecentWorkPayout[] {
   }
 }
 
+export function getKnownRecordCount() {
+  return loadRecentGroups().length + loadRecentWorkPayouts().length;
+}
+
 export function saveMemberName(address: string, name: string) {
   if (typeof window === 'undefined') return;
 

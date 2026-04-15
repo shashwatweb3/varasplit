@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { getGroup, getInvoice, getSettlementPlan } from './adapter';
+import { getGroup, getInvoice, getInvoiceByToken, getSettlementPlan } from './adapter';
 import { getDebtors } from './derived';
 import { addressesEqual, formatTvara } from './format';
-import { loadRecentGroups, loadRecentWorkPayouts } from './storage';
+import { getKnownRecordCount, loadRecentGroups, loadRecentWorkPayouts, saveRecentGroup, saveRecentWorkPayout } from './storage';
 import type { InvoiceNft, ProofInvoice, WalletAccount } from './types';
 import { useWallet } from './wallet';
-import { getPayout, getProof } from './workPayoutAdapter';
+import { getPayout, getProof, getProofByToken } from './workPayoutAdapter';
 
 export const ACTION_CENTER_REFRESH_EVENT = 'varasplit:action-center-refresh';
 
@@ -44,6 +44,12 @@ interface ActionCounts {
   pendingWork: number;
   pending: number;
   proofReady: number;
+}
+
+interface ActionSnapshot {
+  items: ActionItem[];
+  knownRecordCount: number;
+  checkedRecordCount: number;
 }
 
 const emptyCounts: ActionCounts = {
@@ -82,12 +88,59 @@ function groupInvolvesAccount(proof: InvoiceNft, address: string) {
   );
 }
 
-async function buildItems(account: WalletAccount, read: Set<string>) {
+function parseRouteId(value: string | undefined) {
+  if (!value || !/^\d+$/.test(value)) return null;
+  return BigInt(value);
+}
+
+async function primeKnownRecordsFromPathname(pathname: string | null) {
+  if (!pathname) return false;
+
+  const payoutProofMatch = pathname.match(/^\/work-payouts\/proof\/(\d+)$/);
+  if (payoutProofMatch) {
+    const tokenId = parseRouteId(payoutProofMatch[1]);
+    if (!tokenId) return false;
+    const proof = await getProofByToken(tokenId);
+    saveRecentWorkPayout(Number(proof.payoutId), proof.title);
+    return true;
+  }
+
+  const groupProofMatch = pathname.match(/^\/invoice\/(\d+)$/);
+  if (groupProofMatch) {
+    const tokenId = parseRouteId(groupProofMatch[1]);
+    if (!tokenId) return false;
+    const invoice = await getInvoiceByToken(tokenId);
+    saveRecentGroup(Number(invoice.groupId), `Group #${invoice.groupId.toString()}`);
+    return true;
+  }
+
+  const groupMatch = pathname.match(/^\/group\/(\d+)$/);
+  if (groupMatch) {
+    const groupId = Number(groupMatch[1]);
+    saveRecentGroup(groupId);
+    return true;
+  }
+
+  const payoutMatch = pathname.match(/^\/work-payouts\/(\d+)$/);
+  if (payoutMatch) {
+    const payoutId = Number(payoutMatch[1]);
+    saveRecentWorkPayout(payoutId);
+    return true;
+  }
+
+  return false;
+}
+
+async function buildItems(account: WalletAccount, read: Set<string>): Promise<ActionSnapshot> {
   const items: ActionItem[] = [];
+  let checkedRecordCount = 0;
 
   // These local lists are only a discovery index for records the app has seen.
   // Every visible action below is derived from fresh contract queries.
   const knownGroups = loadRecentGroups();
+  const knownPayouts = loadRecentWorkPayouts();
+  const knownRecordCount = knownGroups.length + knownPayouts.length;
+
   await Promise.all(
     knownGroups.map(async (recent) => {
       try {
@@ -96,6 +149,7 @@ async function buildItems(account: WalletAccount, read: Set<string>) {
           getGroup(groupId),
           getSettlementPlan(groupId).catch(() => []),
         ]);
+        checkedRecordCount += 1;
 
         let proof: InvoiceNft | null = null;
         try {
@@ -196,12 +250,12 @@ async function buildItems(account: WalletAccount, read: Set<string>) {
     }),
   );
 
-  const knownPayouts = loadRecentWorkPayouts();
   await Promise.all(
     knownPayouts.map(async (recent) => {
       try {
         const payoutId = BigInt(recent.id);
         const payout = await getPayout(payoutId);
+        checkedRecordCount += 1;
         let proof: ProofInvoice | null = null;
 
         try {
@@ -284,7 +338,11 @@ async function buildItems(account: WalletAccount, read: Set<string>) {
     }),
   );
 
-  return items.sort((a, b) => b.priority - a.priority || b.createdAt - a.createdAt).slice(0, 30);
+  return {
+    items: items.sort((a, b) => b.priority - a.priority || b.createdAt - a.createdAt).slice(0, 30),
+    knownRecordCount,
+    checkedRecordCount,
+  };
 }
 
 function countsFor(items: ActionItem[]): ActionCounts {
@@ -309,6 +367,8 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
   const pathname = usePathname();
   const account = accountOverride === undefined ? wallet.selectedAccount : accountOverride;
   const [items, setItems] = useState<ActionItem[]>([]);
+  const [knownRecordCount, setKnownRecordCount] = useState(0);
+  const [checkedRecordCount, setCheckedRecordCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
@@ -319,6 +379,8 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
 
     if (!account) {
       setItems([]);
+      setKnownRecordCount(getKnownRecordCount());
+      setCheckedRecordCount(0);
       setError(null);
       return;
     }
@@ -326,9 +388,11 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
     setLoading(true);
     setError(null);
     try {
-      const nextItems = await buildItems(account, readIds());
+      const snapshot = await buildItems(account, readIds());
       if (requestId.current === currentRequest) {
-        setItems(nextItems);
+        setItems(snapshot.items);
+        setKnownRecordCount(snapshot.knownRecordCount);
+        setCheckedRecordCount(snapshot.checkedRecordCount);
       }
     } catch (err) {
       if (requestId.current === currentRequest) {
@@ -349,7 +413,17 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
   }, []);
 
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+
+    primeKnownRecordsFromPathname(pathname)
+      .catch(() => false)
+      .finally(() => {
+        if (!cancelled) refresh();
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [refresh, pathname]);
 
   useEffect(() => {
@@ -382,6 +456,8 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
 
   const unreadCount = useMemo(() => items.filter((item) => item.unread).length, [items]);
   const counts = useMemo(() => countsFor(items), [items]);
+  const hasKnownRecords = knownRecordCount > 0;
+  const hasCheckedKnownRecords = knownRecordCount > 0 && checkedRecordCount === knownRecordCount;
 
   return {
     loading,
@@ -389,6 +465,10 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
     unreadCount,
     items,
     counts,
+    knownRecordCount,
+    checkedRecordCount,
+    hasKnownRecords,
+    hasCheckedKnownRecords,
     refresh,
     markRead,
   };
