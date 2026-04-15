@@ -24,7 +24,11 @@ interface StoredAccount {
   };
 }
 
-export function saveRecentGroup(groupId: number, groupName?: string) {
+interface SaveRecentOptions {
+  silent?: boolean;
+}
+
+export function saveRecentGroup(groupId: number, groupName?: string, options?: SaveRecentOptions) {
   if (typeof window === 'undefined') return;
 
   const current = loadRecentGroups();
@@ -34,7 +38,9 @@ export function saveRecentGroup(groupId: number, groupName?: string) {
   };
   const next = [nextEntry, ...current.filter((item) => item.id !== groupId)].slice(0, 50);
   window.localStorage.setItem(RECENT_GROUPS_KEY, JSON.stringify(next));
-  window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
+  if (!options?.silent) {
+    window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
+  }
 }
 
 export function loadRecentGroups(): RecentGroup[] {
@@ -72,7 +78,7 @@ export function loadRecentGroups(): RecentGroup[] {
   }
 }
 
-export function saveRecentWorkPayout(payoutId: number, title?: string) {
+export function saveRecentWorkPayout(payoutId: number, title?: string, options?: SaveRecentOptions) {
   if (typeof window === 'undefined') return;
 
   const current = loadRecentWorkPayouts();
@@ -82,7 +88,9 @@ export function saveRecentWorkPayout(payoutId: number, title?: string) {
   };
   const next = [nextEntry, ...current.filter((item) => item.id !== payoutId)].slice(0, 50);
   window.localStorage.setItem(RECENT_WORK_PAYOUTS_KEY, JSON.stringify(next));
-  window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
+  if (!options?.silent) {
+    window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
+  }
 }
 
 export function loadRecentWorkPayouts(): RecentWorkPayout[] {

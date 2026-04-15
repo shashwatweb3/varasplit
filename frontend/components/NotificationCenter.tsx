@@ -29,16 +29,20 @@ export function NotificationCenter() {
     hasCheckedKnownRecords,
   } = useActionCenter(wallet.selectedAccount);
   const itemCount = actionItems.length;
-  const emptyTitle = hasKnownRecords
-    ? hasCheckedKnownRecords
+  const emptyTitle = loading
+    ? 'Checking contract records'
+    : hasCheckedKnownRecords
       ? 'You’re all caught up'
-      : 'Checking known records'
-    : 'No known actions yet';
-  const emptyCopy = hasKnownRecords
-    ? hasCheckedKnownRecords
+      : hasKnownRecords
+        ? 'Checking known records'
+        : 'No known actions yet';
+  const emptyCopy = loading
+    ? 'Reading contract records for your connected wallet.'
+    : hasCheckedKnownRecords
       ? 'No pending actions right now. Proof-ready records appear here automatically.'
-      : 'Open one of your recent records again if this does not update.'
-    : 'Open a group or payout to track it here. Your recent records will appear automatically once opened.';
+      : hasKnownRecords
+        ? 'Open one of your recent records again if this does not update.'
+        : 'Open a group or payout to track it here. Your recent records will appear automatically once opened.';
 
   if (!wallet.isConnected) return null;
 

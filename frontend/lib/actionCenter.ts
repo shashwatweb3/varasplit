@@ -15,6 +15,8 @@ export const ACTION_CENTER_REFRESH_EVENT = 'varasplit:action-center-refresh';
 
 const READ_ACTIONS_KEY = 'varasplit.action-center.read';
 const POLL_MS = 20_000;
+const MAX_CONTRACT_DISCOVERY_ID = 100;
+const DISCOVERY_BATCH_SIZE = 10;
 
 export type ActionItemType =
   | 'group_pay'
@@ -50,6 +52,8 @@ interface ActionSnapshot {
   items: ActionItem[];
   knownRecordCount: number;
   checkedRecordCount: number;
+  scannedRecordCount: number;
+  contractDiscoveryComplete: boolean;
 }
 
 const emptyCounts: ActionCounts = {
@@ -93,6 +97,29 @@ function parseRouteId(value: string | undefined) {
   return BigInt(value);
 }
 
+function getContractDiscoveryIds(localIds: number[]) {
+  const ids = new Set<number>();
+
+  for (let id = 1; id <= MAX_CONTRACT_DISCOVERY_ID; id += 1) {
+    ids.add(id);
+  }
+
+  localIds.forEach((id) => {
+    if (Number.isSafeInteger(id) && id > 0) {
+      ids.add(id);
+    }
+  });
+
+  return [...ids].sort((a, b) => a - b);
+}
+
+async function forEachInBatches<T>(items: T[], batchSize: number, handler: (item: T) => Promise<void>) {
+  for (let index = 0; index < items.length; index += batchSize) {
+    const batch = items.slice(index, index + batchSize);
+    await Promise.all(batch.map(handler));
+  }
+}
+
 async function primeKnownRecordsFromPathname(pathname: string | null) {
   if (!pathname) return false;
 
@@ -134,32 +161,41 @@ async function primeKnownRecordsFromPathname(pathname: string | null) {
 async function buildItems(account: WalletAccount, read: Set<string>): Promise<ActionSnapshot> {
   const items: ActionItem[] = [];
   let checkedRecordCount = 0;
+  let knownRecordCount = 0;
 
-  // These local lists are only a discovery index for records the app has seen.
-  // Every visible action below is derived from fresh contract queries.
-  const knownGroups = loadRecentGroups();
-  const knownPayouts = loadRecentWorkPayouts();
-  const knownRecordCount = knownGroups.length + knownPayouts.length;
+  const recentGroups = loadRecentGroups();
+  const recentPayouts = loadRecentWorkPayouts();
+  const recentGroupById = new Map(recentGroups.map((recent) => [recent.id, recent]));
+  const recentPayoutById = new Map(recentPayouts.map((recent) => [recent.id, recent]));
+  const groupIds = getContractDiscoveryIds(recentGroups.map((recent) => recent.id));
+  const payoutIds = getContractDiscoveryIds(recentPayouts.map((recent) => recent.id));
+  const scannedRecordCount = groupIds.length + payoutIds.length;
 
-  await Promise.all(
-    knownGroups.map(async (recent) => {
+  await forEachInBatches(
+    groupIds,
+    DISCOVERY_BATCH_SIZE,
+    async (id) => {
       try {
-        const groupId = BigInt(recent.id);
-        const [group, plan] = await Promise.all([
-          getGroup(groupId),
-          getSettlementPlan(groupId).catch(() => []),
-        ]);
+        const groupId = BigInt(id);
+        const group = await getGroup(groupId);
         checkedRecordCount += 1;
 
+        const userIsGroupMember = group.members.some((member) => addressesEqual(member, account.address));
+        if (!userIsGroupMember) return;
+
+        knownRecordCount += 1;
+
+        const recent = recentGroupById.get(id);
+        const groupName = group.name || recent?.name || `Group #${group.id.toString()}`;
+        saveRecentGroup(Number(group.id), groupName, { silent: true });
+
+        const plan = await getSettlementPlan(groupId).catch(() => []);
         let proof: InvoiceNft | null = null;
         try {
           proof = await getInvoice(groupId);
         } catch {
           proof = null;
         }
-
-        const groupName = group.name || recent.name || `Group #${group.id.toString()}`;
-        const userIsGroupMember = group.members.some((member) => addressesEqual(member, account.address));
 
         if (proof) {
           if (!userIsGroupMember && !groupInvolvesAccount(proof, account.address)) return;
@@ -247,25 +283,32 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
       } catch {
         return;
       }
-    }),
+    },
   );
 
-  await Promise.all(
-    knownPayouts.map(async (recent) => {
+  await forEachInBatches(
+    payoutIds,
+    DISCOVERY_BATCH_SIZE,
+    async (id) => {
       try {
-        const payoutId = BigInt(recent.id);
+        const payoutId = BigInt(id);
         const payout = await getPayout(payoutId);
         checkedRecordCount += 1;
-        let proof: ProofInvoice | null = null;
 
+        const userIsPayer = addressesEqual(payout.payerWallet, account.address);
+        const userIsRecipient = payout.recipients.some((recipient) => addressesEqual(recipient.wallet, account.address));
+        if (!userIsPayer && !userIsRecipient) return;
+
+        knownRecordCount += 1;
+        const recent = recentPayoutById.get(id);
+        saveRecentWorkPayout(Number(payout.id), payout.title || recent?.title, { silent: true });
+
+        let proof: ProofInvoice | null = null;
         try {
           proof = await getProof(payoutId);
         } catch {
           proof = null;
         }
-        const userIsPayer = addressesEqual(payout.payerWallet, account.address);
-        const userIsRecipient = payout.recipients.some((recipient) => addressesEqual(recipient.wallet, account.address));
-        if (!userIsPayer && !userIsRecipient) return;
 
         if (proof) {
           const claim = proof.payouts.find((record) => addressesEqual(record.recipient, account.address) && !record.claimed);
@@ -335,13 +378,15 @@ async function buildItems(account: WalletAccount, read: Set<string>): Promise<Ac
       } catch {
         return;
       }
-    }),
+    },
   );
 
   return {
     items: items.sort((a, b) => b.priority - a.priority || b.createdAt - a.createdAt).slice(0, 30),
     knownRecordCount,
     checkedRecordCount,
+    scannedRecordCount,
+    contractDiscoveryComplete: true,
   };
 }
 
@@ -369,6 +414,8 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
   const [items, setItems] = useState<ActionItem[]>([]);
   const [knownRecordCount, setKnownRecordCount] = useState(0);
   const [checkedRecordCount, setCheckedRecordCount] = useState(0);
+  const [scannedRecordCount, setScannedRecordCount] = useState(0);
+  const [contractDiscoveryComplete, setContractDiscoveryComplete] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
@@ -381,7 +428,10 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
       setItems([]);
       setKnownRecordCount(getKnownRecordCount());
       setCheckedRecordCount(0);
+      setScannedRecordCount(0);
+      setContractDiscoveryComplete(false);
       setError(null);
+      setLoading(false);
       return;
     }
 
@@ -393,10 +443,13 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
         setItems(snapshot.items);
         setKnownRecordCount(snapshot.knownRecordCount);
         setCheckedRecordCount(snapshot.checkedRecordCount);
+        setScannedRecordCount(snapshot.scannedRecordCount);
+        setContractDiscoveryComplete(snapshot.contractDiscoveryComplete);
       }
     } catch (err) {
       if (requestId.current === currentRequest) {
         setError(err instanceof Error ? err.message : 'Unable to refresh actions.');
+        setContractDiscoveryComplete(false);
       }
     } finally {
       if (requestId.current === currentRequest) {
@@ -457,7 +510,7 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
   const unreadCount = useMemo(() => items.filter((item) => item.unread).length, [items]);
   const counts = useMemo(() => countsFor(items), [items]);
   const hasKnownRecords = knownRecordCount > 0;
-  const hasCheckedKnownRecords = knownRecordCount > 0 && checkedRecordCount === knownRecordCount;
+  const hasCheckedKnownRecords = contractDiscoveryComplete;
 
   return {
     loading,
@@ -467,6 +520,8 @@ export function useActionCenter(accountOverride?: WalletAccount | null) {
     counts,
     knownRecordCount,
     checkedRecordCount,
+    scannedRecordCount,
+    contractDiscoveryComplete,
     hasKnownRecords,
     hasCheckedKnownRecords,
     refresh,

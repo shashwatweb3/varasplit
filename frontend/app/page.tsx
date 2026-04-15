@@ -134,22 +134,26 @@ export default function HomePage() {
             title={
               actionCount
                 ? `${actionCount} pending item${actionCount === 1 ? '' : 's'}`
-                : hasKnownRecords && hasCheckedKnownRecords
+                : actionsLoading
+                  ? 'Checking contract records'
+                  : hasCheckedKnownRecords
                   ? 'Nothing urgent right now'
                   : hasKnownRecords
                     ? 'Checking known records'
                     : 'No known actions yet'
             }
-            copy={actionsError || (hasKnownRecords
-              ? 'These cards refresh from live contract reads, route changes, tab focus, and successful actions.'
-              : 'Open a group or payout to track it here. Your recent records will appear automatically once opened.')}
+            copy={actionsError || (hasCheckedKnownRecords
+              ? 'These cards refresh from live contract reads for your connected wallet.'
+              : hasKnownRecords
+                ? 'Checking records linked to this wallet.'
+                : 'Open a group or payout to track it here. Your recent records will appear automatically once opened.')}
             icon={Bell}
             action={<button type="button" onClick={() => refreshActions()} className="secondary-button">{actionsLoading ? 'Refreshing...' : 'Refresh'}</button>}
           />
           <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <SummaryStatCard label="Pending groups" value={counts.pendingGroups} copy={hasKnownRecords ? 'Needs your action' : 'Open a group to track'} icon={Bell} active={counts.pendingGroups > 0} />
-            <SummaryStatCard label="Pending work" value={counts.pendingWork} copy={hasKnownRecords ? 'Payouts waiting' : 'Open a payout to track'} icon={BriefcaseBusiness} active={counts.pendingWork > 0} />
-            <SummaryStatCard label="Proof Ready" value={counts.proofReady} copy={hasKnownRecords ? 'Ready to share' : 'Proofs appear after opening'} icon={FileCheck2} active={counts.proofReady > 0} />
+            <SummaryStatCard label="Pending groups" value={counts.pendingGroups} copy={hasCheckedKnownRecords ? 'Needs your action' : 'Checking contract'} icon={Bell} active={counts.pendingGroups > 0} />
+            <SummaryStatCard label="Pending work" value={counts.pendingWork} copy={hasCheckedKnownRecords ? 'Payouts waiting' : 'Checking contract'} icon={BriefcaseBusiness} active={counts.pendingWork > 0} />
+            <SummaryStatCard label="Proof Ready" value={counts.proofReady} copy={hasCheckedKnownRecords ? 'Ready to share' : 'Checking contract'} icon={FileCheck2} active={counts.proofReady > 0} />
           </div>
         </MotionSection>
       ) : null}
