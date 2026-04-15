@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -9,7 +9,6 @@ import { ArrowRight, BadgeCheck, Bell, BriefcaseBusiness, FileCheck2, LockKeyhol
 import { ActionBanner } from '@/components/ActionBanner';
 import { AnimatedCard } from '@/components/AnimatedCard';
 import { AnimatedHeroBackground } from '@/components/AnimatedHeroBackground';
-import { ErrorBox } from '@/components/ErrorBox';
 import { HeaderActions } from '@/components/HeaderActions';
 import { MotionSection } from '@/components/MotionSection';
 import { SectionTitle } from '@/components/SectionTitle';
@@ -41,19 +40,7 @@ export default function HomePage() {
   const wallet = useWallet();
   const { counts, loading: actionsLoading, error: actionsError, refresh: refreshActions } = useActionCenter(wallet.selectedAccount);
   const actionCount = counts.pending;
-  const [groupId, setGroupId] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
-
-  function openGroup(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = groupId.trim();
-    if (!/^\d+$/.test(trimmed)) {
-      setError('Enter a valid group number.');
-      return;
-    }
-    router.push(`/group/${trimmed}`);
-  }
 
   function openPayoutCreate() {
     if (hasWorkPayoutInviteAccess()) {
@@ -120,9 +107,6 @@ export default function HomePage() {
                   <ReceiptText className="h-4 w-4" />
                 </button>
               </motion.div>
-              <motion.a whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} href="#open-group" className="secondary-button w-full sm:w-auto">
-                Open Group
-              </motion.a>
             </motion.div>
 
             <motion.div variants={item} className="mx-auto mt-7 grid max-w-2xl gap-3 sm:grid-cols-3">
@@ -231,36 +215,7 @@ export default function HomePage() {
         />
       </MotionSection>
 
-      <motion.section variants={item} className="mt-6 grid gap-5 lg:grid-cols-[0.9fr,1.1fr]">
-        <form id="open-group" onSubmit={openGroup} className="glass-card p-5 sm:p-6">
-          <p className="text-xs font-bold uppercase tracking-[0.22em] text-[#69f5c7]">Already started?</p>
-          <h2 className="mt-3 text-3xl font-black tracking-[-0.03em] text-[#ecfff7]">Open a group</h2>
-          <p className="mt-3 text-sm leading-6 text-[rgba(236,255,247,0.72)]">
-            Enter the group number. Balances, deposits, claims, and proof status load from the contract.
-          </p>
-
-          <label className="mt-7 block text-sm font-semibold text-[#ecfff7]" htmlFor="group-id">
-            Group number
-          </label>
-          <input
-            id="group-id"
-            value={groupId}
-            onChange={(event) => {
-              setError(null);
-              setGroupId(event.target.value);
-            }}
-            inputMode="numeric"
-            className="premium-input mt-2"
-            placeholder="For example, 1"
-          />
-          <div className="mt-4">
-            <ErrorBox message={error} />
-          </div>
-          <motion.button type="submit" whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="primary-button mt-6 w-full">
-            Open Group
-          </motion.button>
-        </form>
-
+      <motion.section variants={item} className="mt-6">
         <div className="glass-card p-5 sm:p-6">
           <div className="flex items-start gap-4">
             <ShieldCheck className="mt-1 h-8 w-8 text-[#69f5c7]" />
