@@ -1,9 +1,12 @@
-export const VARA_SPLIT_IDL = `type GroupView = struct {
+export const VARA_SPLIT_IDL = `type Group = struct {
   id: u64,
   name: str,
   members: vec actor_id,
   balances: vec MemberBalance,
   expenses: vec Expense,
+  escrow: map (actor_id, u128),
+  settlement_plan: vec SettlementTransfer,
+  settled: bool,
 };
 
 type MemberBalance = struct {
@@ -20,30 +23,67 @@ type Expense = struct {
   created_at: u64,
 };
 
-type GroupSettlement = struct {
-  group_id: u64,
-  transfers: vec SettlementTransfer,
-  total_settled: u128,
-};
-
 type SettlementTransfer = struct {
   from: actor_id,
   to: actor_id,
   amount: u128,
 };
 
+type VaraSplitEscrowError = enum {
+  AlreadySettled,
+  AlreadyDeposited,
+  BalanceOverflow,
+  DuplicateMember,
+  GroupNotFound,
+  InvalidAmount,
+  InvalidDepositAmount,
+  InvalidDescription,
+  InvalidGroupName,
+  InvalidMemberCount,
+  MemberNotFound,
+  NotFullyFunded,
+  NotGroupMember,
+  SettlementAlreadyComputed,
+  SettlementIncomplete,
+  TokenIdOverflow,
+  TransferFailed,
+  PayoutAlreadyClaimed,
+  PayoutNotFound,
+};
+
+type InvoiceNft = struct {
+  token_id: u64,
+  group_id: u64,
+  transfers: vec SettlementTransfer,
+  total_settled: u128,
+  settled_at: u64,
+  finalize_block: u32,
+  finalize_extrinsic_index: u32,
+  payouts: vec PayoutRecord,
+};
+
+type PayoutRecord = struct {
+  creditor: actor_id,
+  amount: u128,
+  claimed: bool,
+};
+
 constructor {
   Create : ();
 };
 
-service VaraSplit {
-  CreateGroup : (name: str, members: vec actor_id) -> GroupView;
-  AddExpense : (group_id: u64, payer: actor_id, amount: u128, description: str) -> GroupView;
-  ConfirmPayment : (group_id: u64, from: actor_id, to: actor_id, amount: u128) -> GroupView;
-  SettleGroup : (group_id: u64) -> GroupSettlement;
-  query GetBalances : (group_id: u64) -> vec MemberBalance;
-  query GetGroup : (group_id: u64) -> GroupView;
-  query GetSettlementPlan : (group_id: u64) -> vec SettlementTransfer;
+service VaraSplitEscrow {
+  AddExpense : (group_id: u64, payer: actor_id, amount: u128, description: str) -> result (Group, VaraSplitEscrowError);
+  ClaimPayout : (token_id: u64) -> result (InvoiceNft, VaraSplitEscrowError);
+  ComputeSettlement : (group_id: u64) -> result (Group, VaraSplitEscrowError);
+  CreateGroup : (name: str, members: vec actor_id) -> result (Group, VaraSplitEscrowError);
+  Deposit : (group_id: u64) -> result (Group, VaraSplitEscrowError);
+  FinalizeSettlement : (group_id: u64, finalize_block: u32, finalize_extrinsic_index: u32) -> result (InvoiceNft, VaraSplitEscrowError);
+  RecordFinalizeReference : (token_id: u64, finalize_block: u32, finalize_extrinsic_index: u32) -> result (InvoiceNft, VaraSplitEscrowError);
+  query GetGroup : (group_id: u64) -> result (Group, VaraSplitEscrowError);
+  query GetInvoice : (group_id: u64) -> result (InvoiceNft, VaraSplitEscrowError);
+  query GetInvoiceByToken : (token_id: u64) -> result (InvoiceNft, VaraSplitEscrowError);
+  query GetSettlementPlan : (group_id: u64) -> result (vec SettlementTransfer, VaraSplitEscrowError);
 
   events {
     GroupCreated: struct {
@@ -57,10 +97,34 @@ service VaraSplit {
       amount: u128,
       description: str,
     };
-    GroupSettled: struct {
+    SettlementComputed: struct {
       group_id: u64,
       transfers: vec SettlementTransfer,
       total_settled: u128,
+    };
+    DepositReceived: struct {
+      group_id: u64,
+      from: actor_id,
+      amount: u128,
+    };
+    SettlementFinalized: struct {
+      group_id: u64,
+      total_settled: u128,
+      token_id: u64,
+    };
+    InvoiceMinted: struct {
+      token_id: u64,
+      group_id: u64,
+    };
+    PayoutDispatched: struct {
+      token_id: u64,
+      creditor: actor_id,
+      amount: u128,
+    };
+    PayoutClaimed: struct {
+      token_id: u64,
+      creditor: actor_id,
+      amount: u128,
     };
   }
 };

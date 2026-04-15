@@ -1,0 +1,41 @@
+{
+  "lib/adapter.ts -> sails-js": {
+    "id": 4413,
+    "files": [
+      "static/chunks/488.dd234cc2653ad57f.js",
+      "static/chunks/946.7b391e71d8392b06.js"
+    ]
+  },
+  "lib/adapter.ts -> sails-js-parser": {
+    "id": 4288,
+    "files": [
+      "static/chunks/288.cce8799ae81d3eca.js"
+    ]
+  },
+  "lib/gear.ts -> @gear-js/api": {
+    "id": 7488,
+    "files": [
+      "static/chunks/488.dd234cc2653ad57f.js",
+      "static/chunks/790.58e0e98fe51ef8bf.js"
+    ]
+  },
+  "lib/wallet.ts -> @polkadot/extension-dapp": {
+    "id": 2783,
+    "files": [
+      "static/chunks/783.da2cdd357d4cd7ff.js"
+    ]
+  },
+  "lib/workPayoutAdapter.ts -> sails-js": {
+    "id": 4413,
+    "files": [
+      "static/chunks/488.dd234cc2653ad57f.js",
+      "static/chunks/946.7b391e71d8392b06.js"
+    ]
+  },
+  "lib/workPayoutAdapter.ts -> sails-js-parser": {
+    "id": 4288,
+    "files": [
+      "static/chunks/288.cce8799ae81d3eca.js"
+    ]
+  }
+}

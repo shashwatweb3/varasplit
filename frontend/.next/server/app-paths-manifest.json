@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/_global-error/page": "app/_global-error/page.js",
+  "/create/page": "app/create/page.js",
+  "/invoice/[token]/page": "app/invoice/[token]/page.js",
+  "/group/[id]/page": "app/group/[id]/page.js",
+  "/work-payouts/[id]/page": "app/work-payouts/[id]/page.js",
+  "/work-payouts/create/page": "app/work-payouts/create/page.js",
+  "/work-payouts/page": "app/work-payouts/page.js",
+  "/work-payouts/proof/[token]/page": "app/work-payouts/proof/[token]/page.js",
+  "/page": "app/page.js"
+}

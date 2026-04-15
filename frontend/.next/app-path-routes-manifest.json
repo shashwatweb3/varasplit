@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/_global-error/page": "/_global-error",
+  "/create/page": "/create",
+  "/invoice/[token]/page": "/invoice/[token]",
+  "/group/[id]/page": "/group/[id]",
+  "/work-payouts/[id]/page": "/work-payouts/[id]",
+  "/work-payouts/create/page": "/work-payouts/create",
+  "/work-payouts/page": "/work-payouts",
+  "/work-payouts/proof/[token]/page": "/work-payouts/proof/[token]",
+  "/page": "/"
+}

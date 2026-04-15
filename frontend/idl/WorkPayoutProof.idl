@@ -1,0 +1,117 @@
+type PayoutCategory = enum {
+  Freelance,
+  Bounty,
+  Salary,
+  Custom,
+};
+
+type RecipientEntry = struct {
+  name: str,
+  wallet: actor_id,
+  amount: u128,
+};
+
+type WorkPayout = struct {
+  id: u64,
+  payer_name: str,
+  payer_wallet: actor_id,
+  recipients: vec RecipientEntry,
+  title: str,
+  reason: str,
+  category: PayoutCategory,
+  total_amount: u128,
+  funded: bool,
+  completed: bool,
+  proof_token_id: opt u64,
+  created_at: u64,
+  paid_at: opt u64,
+};
+
+type ProofInvoice = struct {
+  token_id: u64,
+  payout_id: u64,
+  payer_name: str,
+  payer_wallet: actor_id,
+  recipients: vec RecipientEntry,
+  title: str,
+  reason: str,
+  category: PayoutCategory,
+  total_amount: u128,
+  created_at: u64,
+  paid_at: u64,
+  finalize_block: u32,
+  finalize_extrinsic_index: u32,
+  payouts: vec PayoutRecord,
+};
+
+type PayoutRecord = struct {
+  recipient: actor_id,
+  amount: u128,
+  claimed: bool,
+};
+
+type WorkPayoutProofError = enum {
+  AlreadyCompleted,
+  AlreadyFunded,
+  InvalidAmount,
+  InvalidCategory,
+  InvalidDescription,
+  InvalidPayerName,
+  InvalidRecipient,
+  InvalidRecipientCount,
+  InvalidTitle,
+  NotFunded,
+  NotPayer,
+  PayoutNotFound,
+  ProofNotFound,
+  TokenIdOverflow,
+  TransferFailed,
+  PayoutAlreadyClaimed,
+  PayoutNotFoundForRecipient,
+};
+
+constructor {
+  Create : ();
+};
+
+service WorkPayoutProof {
+  CreatePayout : (payer_name: str, recipients: vec RecipientEntry, title: str, reason: str, category: PayoutCategory) -> result (WorkPayout, WorkPayoutProofError);
+  FundPayout : (payout_id: u64) -> result (WorkPayout, WorkPayoutProofError);
+  FinalizePayout : (payout_id: u64, finalize_block: u32, finalize_extrinsic_index: u32) -> result (ProofInvoice, WorkPayoutProofError);
+  ClaimPayout : (token_id: u64) -> result (ProofInvoice, WorkPayoutProofError);
+  query GetPayout : (payout_id: u64) -> result (WorkPayout, WorkPayoutProofError);
+  query GetProof : (payout_id: u64) -> result (ProofInvoice, WorkPayoutProofError);
+  query GetProofByToken : (token_id: u64) -> result (ProofInvoice, WorkPayoutProofError);
+
+  events {
+    PayoutCreated: struct {
+      payout_id: u64,
+      payer_wallet: actor_id,
+      total_amount: u128,
+    };
+    PayoutFunded: struct {
+      payout_id: u64,
+      payer_wallet: actor_id,
+      amount: u128,
+    };
+    PayoutFinalized: struct {
+      payout_id: u64,
+      token_id: u64,
+      total_amount: u128,
+    };
+    ProofMinted: struct {
+      token_id: u64,
+      payout_id: u64,
+    };
+    RecipientPaid: struct {
+      token_id: u64,
+      recipient: actor_id,
+      amount: u128,
+    };
+    PayoutClaimed: struct {
+      token_id: u64,
+      recipient: actor_id,
+      amount: u128,
+    };
+  }
+};

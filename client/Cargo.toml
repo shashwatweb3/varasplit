@@ -15,4 +15,4 @@ sails-rs.workspace = true
 
 [build-dependencies]
 sails-rs = { workspace = true, features = ["build"] }
-vara-split-app.workspace = true
+vara_split_escrow.workspace = true

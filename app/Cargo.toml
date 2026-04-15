@@ -1,14 +1,31 @@
 [package]
-name = "vara-split-app"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-description = "Package containing business logic for the program"
-repository.workspace = true
-license.workspace = true
-keywords.workspace = true
-categories.workspace = true
+name = "vara_split_escrow"
+version = "0.1.0"
+authors = ["Shashwat Chauhan"]
+edition = "2024"
+rust-version = "1.91"
+description = "VaraSplit escrow smart contract"
+repository = "https://github.com/shashwatchauhan/vara-split"
+license = "MIT"
+keywords = ["gear", "sails", "smart-contracts", "wasm", "no-std"]
+categories = ["cryptography::cryptocurrencies", "no-std", "wasm"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-sails-rs.workspace = true
+sails-rs = "0.10.3"
+
+[build-dependencies]
+sails-rs = { version = "0.10.3", features = ["build"] }
+
+[workspace]
+resolver = "3"
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+lto = "fat"
+opt-level = "z"
+codegen-units = 1

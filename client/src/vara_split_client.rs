@@ -5,14 +5,18 @@ pub struct VaraSplitClientProgram;
 impl sails_rs::client::Program for VaraSplitClientProgram {}
 pub trait VaraSplitClient {
     type Env: sails_rs::client::GearEnv;
-    fn vara_split(&self) -> sails_rs::client::Service<vara_split::VaraSplitImpl, Self::Env>;
+    fn vara_split_escrow(
+        &self,
+    ) -> sails_rs::client::Service<vara_split_escrow::VaraSplitEscrowImpl, Self::Env>;
 }
 impl<E: sails_rs::client::GearEnv> VaraSplitClient
     for sails_rs::client::Actor<VaraSplitClientProgram, E>
 {
     type Env = E;
-    fn vara_split(&self) -> sails_rs::client::Service<vara_split::VaraSplitImpl, Self::Env> {
-        self.service(stringify!(VaraSplit))
+    fn vara_split_escrow(
+        &self,
+    ) -> sails_rs::client::Service<vara_split_escrow::VaraSplitEscrowImpl, Self::Env> {
+        self.service(stringify!(VaraSplitEscrow))
     }
 }
 pub trait VaraSplitClientCtors {
@@ -36,9 +40,9 @@ pub mod io {
     sails_rs::io_struct_impl!(Create () -> ());
 }
 
-pub mod vara_split {
+pub mod vara_split_escrow {
     use super::*;
-    pub trait VaraSplit {
+    pub trait VaraSplitEscrow {
         type Env: sails_rs::client::GearEnv;
         fn add_expense(
             &mut self,
@@ -47,37 +51,56 @@ pub mod vara_split {
             amount: u128,
             description: String,
         ) -> sails_rs::client::PendingCall<io::AddExpense, Self::Env>;
-        fn confirm_payment(
+        fn claim_payout(
+            &mut self,
+            token_id: u64,
+        ) -> sails_rs::client::PendingCall<io::ClaimPayout, Self::Env>;
+        fn compute_settlement(
             &mut self,
             group_id: u64,
-            from: ActorId,
-            to: ActorId,
-            amount: u128,
-        ) -> sails_rs::client::PendingCall<io::ConfirmPayment, Self::Env>;
+        ) -> sails_rs::client::PendingCall<io::ComputeSettlement, Self::Env>;
         fn create_group(
             &mut self,
             name: String,
             members: Vec<ActorId>,
         ) -> sails_rs::client::PendingCall<io::CreateGroup, Self::Env>;
-        fn settle_group(
+        fn deposit(
             &mut self,
             group_id: u64,
-        ) -> sails_rs::client::PendingCall<io::SettleGroup, Self::Env>;
-        fn get_balances(
-            &self,
+        ) -> sails_rs::client::PendingCall<io::Deposit, Self::Env>;
+        fn finalize_settlement(
+            &mut self,
             group_id: u64,
-        ) -> sails_rs::client::PendingCall<io::GetBalances, Self::Env>;
+            finalize_block: u32,
+            finalize_extrinsic_index: u32,
+        ) -> sails_rs::client::PendingCall<io::FinalizeSettlement, Self::Env>;
+        fn record_finalize_reference(
+            &mut self,
+            token_id: u64,
+            finalize_block: u32,
+            finalize_extrinsic_index: u32,
+        ) -> sails_rs::client::PendingCall<io::RecordFinalizeReference, Self::Env>;
         fn get_group(
             &self,
             group_id: u64,
         ) -> sails_rs::client::PendingCall<io::GetGroup, Self::Env>;
+        fn get_invoice(
+            &self,
+            group_id: u64,
+        ) -> sails_rs::client::PendingCall<io::GetInvoice, Self::Env>;
+        fn get_invoice_by_token(
+            &self,
+            token_id: u64,
+        ) -> sails_rs::client::PendingCall<io::GetInvoiceByToken, Self::Env>;
         fn get_settlement_plan(
             &self,
             group_id: u64,
         ) -> sails_rs::client::PendingCall<io::GetSettlementPlan, Self::Env>;
     }
-    pub struct VaraSplitImpl;
-    impl<E: sails_rs::client::GearEnv> VaraSplit for sails_rs::client::Service<VaraSplitImpl, E> {
+    pub struct VaraSplitEscrowImpl;
+    impl<E: sails_rs::client::GearEnv> VaraSplitEscrow
+        for sails_rs::client::Service<VaraSplitEscrowImpl, E>
+    {
         type Env = E;
         fn add_expense(
             &mut self,
@@ -88,14 +111,17 @@ pub mod vara_split {
         ) -> sails_rs::client::PendingCall<io::AddExpense, Self::Env> {
             self.pending_call((group_id, payer, amount, description))
         }
-        fn confirm_payment(
+        fn claim_payout(
+            &mut self,
+            token_id: u64,
+        ) -> sails_rs::client::PendingCall<io::ClaimPayout, Self::Env> {
+            self.pending_call((token_id,))
+        }
+        fn compute_settlement(
             &mut self,
             group_id: u64,
-            from: ActorId,
-            to: ActorId,
-            amount: u128,
-        ) -> sails_rs::client::PendingCall<io::ConfirmPayment, Self::Env> {
-            self.pending_call((group_id, from, to, amount))
+        ) -> sails_rs::client::PendingCall<io::ComputeSettlement, Self::Env> {
+            self.pending_call((group_id,))
         }
         fn create_group(
             &mut self,
@@ -104,23 +130,45 @@ pub mod vara_split {
         ) -> sails_rs::client::PendingCall<io::CreateGroup, Self::Env> {
             self.pending_call((name, members))
         }
-        fn settle_group(
+        fn deposit(
             &mut self,
             group_id: u64,
-        ) -> sails_rs::client::PendingCall<io::SettleGroup, Self::Env> {
+        ) -> sails_rs::client::PendingCall<io::Deposit, Self::Env> {
             self.pending_call((group_id,))
         }
-        fn get_balances(
-            &self,
+        fn finalize_settlement(
+            &mut self,
             group_id: u64,
-        ) -> sails_rs::client::PendingCall<io::GetBalances, Self::Env> {
-            self.pending_call((group_id,))
+            finalize_block: u32,
+            finalize_extrinsic_index: u32,
+        ) -> sails_rs::client::PendingCall<io::FinalizeSettlement, Self::Env> {
+            self.pending_call((group_id, finalize_block, finalize_extrinsic_index))
+        }
+        fn record_finalize_reference(
+            &mut self,
+            token_id: u64,
+            finalize_block: u32,
+            finalize_extrinsic_index: u32,
+        ) -> sails_rs::client::PendingCall<io::RecordFinalizeReference, Self::Env> {
+            self.pending_call((token_id, finalize_block, finalize_extrinsic_index))
         }
         fn get_group(
             &self,
             group_id: u64,
         ) -> sails_rs::client::PendingCall<io::GetGroup, Self::Env> {
             self.pending_call((group_id,))
+        }
+        fn get_invoice(
+            &self,
+            group_id: u64,
+        ) -> sails_rs::client::PendingCall<io::GetInvoice, Self::Env> {
+            self.pending_call((group_id,))
+        }
+        fn get_invoice_by_token(
+            &self,
+            token_id: u64,
+        ) -> sails_rs::client::PendingCall<io::GetInvoiceByToken, Self::Env> {
+            self.pending_call((token_id,))
         }
         fn get_settlement_plan(
             &self,
@@ -132,13 +180,17 @@ pub mod vara_split {
 
     pub mod io {
         use super::*;
-        sails_rs::io_struct_impl!(AddExpense (group_id: u64, payer: ActorId, amount: u128, description: String) -> super::GroupView);
-        sails_rs::io_struct_impl!(ConfirmPayment (group_id: u64, from: ActorId, to: ActorId, amount: u128) -> super::GroupView);
-        sails_rs::io_struct_impl!(CreateGroup (name: String, members: Vec<ActorId>) -> super::GroupView);
-        sails_rs::io_struct_impl!(SettleGroup (group_id: u64) -> super::GroupSettlement);
-        sails_rs::io_struct_impl!(GetBalances (group_id: u64) -> Vec<super::MemberBalance>);
-        sails_rs::io_struct_impl!(GetGroup (group_id: u64) -> super::GroupView);
-        sails_rs::io_struct_impl!(GetSettlementPlan (group_id: u64) -> Vec<super::SettlementTransfer>);
+        sails_rs::io_struct_impl!(AddExpense (group_id: u64, payer: ActorId, amount: u128, description: String) -> Result<super::Group, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(ClaimPayout (token_id: u64) -> Result<super::InvoiceNft, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(ComputeSettlement (group_id: u64) -> Result<super::Group, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(CreateGroup (name: String, members: Vec<ActorId>) -> Result<super::Group, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(Deposit (group_id: u64) -> Result<super::Group, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(FinalizeSettlement (group_id: u64, finalize_block: u32, finalize_extrinsic_index: u32) -> Result<super::InvoiceNft, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(RecordFinalizeReference (token_id: u64, finalize_block: u32, finalize_extrinsic_index: u32) -> Result<super::InvoiceNft, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(GetGroup (group_id: u64) -> Result<super::Group, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(GetInvoice (group_id: u64) -> Result<super::InvoiceNft, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(GetInvoiceByToken (token_id: u64) -> Result<super::InvoiceNft, super::VaraSplitEscrowError>);
+        sails_rs::io_struct_impl!(GetSettlementPlan (group_id: u64) -> Result<Vec<super::SettlementTransfer>, super::VaraSplitEscrowError>);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -146,7 +198,7 @@ pub mod vara_split {
         use super::*;
         #[derive(PartialEq, Debug, Encode, Decode)]
         #[codec(crate = sails_rs::scale_codec)]
-        pub enum VaraSplitEvents {
+        pub enum VaraSplitEscrowEvents {
             GroupCreated {
                 group_id: u64,
                 name: String,
@@ -158,40 +210,65 @@ pub mod vara_split {
                 amount: u128,
                 description: String,
             },
-            GroupSettled {
+            SettlementComputed {
                 group_id: u64,
                 transfers: Vec<SettlementTransfer>,
                 total_settled: u128,
             },
-            PaymentConfirmed {
+            DepositReceived {
                 group_id: u64,
                 from: ActorId,
-                to: ActorId,
+                amount: u128,
+            },
+            SettlementFinalized {
+                group_id: u64,
+                total_settled: u128,
+                token_id: u64,
+            },
+            InvoiceMinted {
+                token_id: u64,
+                group_id: u64,
+            },
+            PayoutDispatched {
+                token_id: u64,
+                creditor: ActorId,
+                amount: u128,
+            },
+            PayoutClaimed {
+                token_id: u64,
+                creditor: ActorId,
                 amount: u128,
             },
         }
-        impl sails_rs::client::Event for VaraSplitEvents {
+        impl sails_rs::client::Event for VaraSplitEscrowEvents {
             const EVENT_NAMES: &'static [Route] = &[
                 "GroupCreated",
                 "ExpenseAdded",
-                "GroupSettled",
-                "PaymentConfirmed",
+                "SettlementComputed",
+                "DepositReceived",
+                "SettlementFinalized",
+                "InvoiceMinted",
+                "PayoutDispatched",
+                "PayoutClaimed",
             ];
         }
-        impl sails_rs::client::ServiceWithEvents for VaraSplitImpl {
-            type Event = VaraSplitEvents;
+        impl sails_rs::client::ServiceWithEvents for VaraSplitEscrowImpl {
+            type Event = VaraSplitEscrowEvents;
         }
     }
 }
 #[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
-pub struct GroupView {
+pub struct Group {
     pub id: u64,
     pub name: String,
     pub members: Vec<ActorId>,
     pub balances: Vec<MemberBalance>,
     pub expenses: Vec<Expense>,
+    pub escrow: BTreeMap<ActorId, u128>,
+    pub settlement_plan: Vec<SettlementTransfer>,
+    pub settled: bool,
 }
 #[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
@@ -214,16 +291,53 @@ pub struct Expense {
 #[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
-pub struct GroupSettlement {
-    pub group_id: u64,
-    pub transfers: Vec<SettlementTransfer>,
-    pub total_settled: u128,
-}
-#[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
-#[codec(crate = sails_rs::scale_codec)]
-#[scale_info(crate = sails_rs::scale_info)]
 pub struct SettlementTransfer {
     pub from: ActorId,
     pub to: ActorId,
     pub amount: u128,
+}
+#[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub enum VaraSplitEscrowError {
+    AlreadySettled,
+    AlreadyDeposited,
+    BalanceOverflow,
+    DuplicateMember,
+    GroupNotFound,
+    InvalidAmount,
+    InvalidDepositAmount,
+    InvalidDescription,
+    InvalidGroupName,
+    InvalidMemberCount,
+    MemberNotFound,
+    NotFullyFunded,
+    NotGroupMember,
+    SettlementAlreadyComputed,
+    SettlementIncomplete,
+    TokenIdOverflow,
+    TransferFailed,
+    PayoutAlreadyClaimed,
+    PayoutNotFound,
+}
+#[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub struct InvoiceNft {
+    pub token_id: u64,
+    pub group_id: u64,
+    pub transfers: Vec<SettlementTransfer>,
+    pub total_settled: u128,
+    pub settled_at: u64,
+    pub finalize_block: u32,
+    pub finalize_extrinsic_index: u32,
+    pub payouts: Vec<PayoutRecord>,
+}
+#[derive(PartialEq, Clone, Debug, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub struct PayoutRecord {
+    pub creditor: ActorId,
+    pub amount: u128,
+    pub claimed: bool,
 }

@@ -1,9 +1,22 @@
-export interface WalletAccount {
-  address: string;
-  meta: {
-    name?: string;
-    source: string;
-  };
+import type { InjectedAccountWithMeta, InjectedExtension } from '@polkadot/extension-inject/types';
+
+export type WalletAccount = InjectedAccountWithMeta;
+
+export type WalletStatus =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'missing'
+  | 'rejected'
+  | 'error';
+
+export interface WalletState {
+  selectedAccount: WalletAccount | null;
+  injector: InjectedExtension | null;
+  isConnected: boolean;
+  availableAccounts: WalletAccount[];
+  status: WalletStatus;
+  error: string | null;
 }
 
 export interface MemberBalance {
@@ -20,54 +33,96 @@ export interface Expense {
   createdAt: number;
 }
 
-export interface GroupView {
-  id: number;
-  name: string;
-  members: string[];
-  balances: MemberBalance[];
-  expenses: Expense[];
-}
-
 export interface SettlementTransfer {
   from: string;
   to: string;
   amount: bigint;
 }
 
-export interface GroupSettlement {
-  groupId: number;
+export interface Group {
+  id: bigint;
+  name: string;
+  members: string[];
+  balances: MemberBalance[];
+  expenses: Expense[];
+  escrow: Record<string, bigint>;
+  settlementPlan: SettlementTransfer[];
+  settled: boolean;
+}
+
+export interface InvoiceNft {
+  tokenId: bigint;
+  groupId: bigint;
   transfers: SettlementTransfer[];
   totalSettled: bigint;
+  settledAt: number;
+  finalizeBlock: number;
+  finalizeExtrinsicIndex: number;
+  payouts: PayoutRecord[];
 }
 
-export interface GroupSummaryCard {
+export interface PayoutRecord {
+  creditor: string;
+  amount: bigint;
+  claimed: boolean;
+}
+
+export interface DebtorStatus {
+  address: string;
+  required: bigint;
+  deposited: bigint;
+  remaining: bigint;
+  paid: boolean;
+}
+
+export interface CreditorStatus {
+  address: string;
+  amount: bigint;
+}
+
+export type PayoutCategory = 'Freelance' | 'Bounty' | 'Salary' | 'Custom';
+
+export interface RecipientEntry {
+  name: string;
+  wallet: string;
+  amount: bigint;
+}
+
+export interface WorkPayout {
+  id: bigint;
+  payerName: string;
+  payerWallet: string;
+  recipients: RecipientEntry[];
   title: string;
-  body: string;
-  tweetUrl: string;
+  reason: string;
+  category: PayoutCategory;
+  totalAmount: bigint;
+  funded: boolean;
+  completed: boolean;
+  proofTokenId: bigint | null;
+  createdAt: number;
+  paidAt: number | null;
 }
 
-export interface PaymentReceipt {
-  blockHash: string;
+export interface ProofInvoice {
+  tokenId: bigint;
+  payoutId: bigint;
+  payerName: string;
+  payerWallet: string;
+  recipients: RecipientEntry[];
+  title: string;
+  reason: string;
+  category: PayoutCategory;
+  totalAmount: bigint;
+  createdAt: number;
+  paidAt: number;
+  finalizeBlock: number;
+  finalizeExtrinsicIndex: number;
+  payouts: WorkPayoutClaimRecord[];
 }
 
-export interface VaraSplitAdapter {
-  createGroup: (name: string, members: string[], account: WalletAccount) => Promise<GroupView>;
-  getGroup: (groupId: number, account?: WalletAccount | null) => Promise<GroupView>;
-  addExpense: (
-    groupId: number,
-    payer: string,
-    amount: bigint,
-    description: string,
-    account: WalletAccount,
-  ) => Promise<GroupView>;
-  getSettlementPlan: (groupId: number, account?: WalletAccount | null) => Promise<SettlementTransfer[]>;
-  settleGroup: (groupId: number, account: WalletAccount) => Promise<GroupSettlement>;
-  confirmPayment: (
-    groupId: number,
-    from: string,
-    to: string,
-    amount: bigint,
-    account: WalletAccount,
-  ) => Promise<unknown>;
-  paySettlementTransfer: (to: string, amount: bigint, account: WalletAccount) => Promise<PaymentReceipt>;
+export interface WorkPayoutClaimRecord {
+  recipient: string;
+  amount: bigint;
+  claimed: boolean;
 }

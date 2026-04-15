@@ -1,0 +1,1 @@
+{"c":["app/layout","app/page","app/create/page","app/group/[id]/page","app/invoice/[token_id]/page","webpack"],"r":[],"m":["(app-pages-browser)/./lib/idl.ts"]}

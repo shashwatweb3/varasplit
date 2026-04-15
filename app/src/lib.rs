@@ -8,24 +8,40 @@ use sails_rs::{
 };
 
 type GroupId = u64;
+type TokenId = u64;
 
 #[derive(Clone, Debug, Default)]
-pub struct VaraSplitState {
+pub struct EscrowStorage {
     group_id_counter: GroupId,
+    token_counter: TokenId,
     groups: BTreeMap<GroupId, Group>,
+    invoice_nfts: BTreeMap<TokenId, InvoiceNFT>,
+    invoice_by_group: BTreeMap<GroupId, TokenId>,
 }
 
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
 pub struct Group {
+    pub id: GroupId,
     pub name: String,
     pub members: Vec<ActorId>,
-    pub balances: BTreeMap<ActorId, i128>,
+    pub balances: Vec<MemberBalance>,
     pub expenses: Vec<Expense>,
+    pub escrow: BTreeMap<ActorId, u128>,
+    pub settlement_plan: Vec<SettlementTransfer>,
+    pub settled: bool,
 }
 
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub struct MemberBalance {
+    pub member: ActorId,
+    pub balance: i128,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
 pub struct Expense {
@@ -40,45 +56,65 @@ pub struct Expense {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
-pub struct MemberBalance {
-    pub member: ActorId,
-    pub balance: i128,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
-#[codec(crate = sails_rs::scale_codec)]
-#[scale_info(crate = sails_rs::scale_info)]
 pub struct SettlementTransfer {
     pub from: ActorId,
     pub to: ActorId,
     pub amount: u128,
 }
 
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
-#[codec(crate = sails_rs::scale_codec)]
-#[scale_info(crate = sails_rs::scale_info)]
-pub struct GroupView {
-    pub id: GroupId,
-    pub name: String,
-    pub members: Vec<ActorId>,
-    pub balances: Vec<MemberBalance>,
-    pub expenses: Vec<Expense>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
-pub struct GroupSettlement {
+pub struct InvoiceNFT {
+    pub token_id: TokenId,
     pub group_id: GroupId,
     pub transfers: Vec<SettlementTransfer>,
     pub total_settled: u128,
+    pub settled_at: u64,
+    pub finalize_block: u32,
+    pub finalize_extrinsic_index: u32,
+    pub payouts: Vec<PayoutRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[codec(crate = sails_rs::scale_codec)]
 #[scale_info(crate = sails_rs::scale_info)]
+pub struct PayoutRecord {
+    pub creditor: ActorId,
+    pub amount: u128,
+    pub claimed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub enum VaraSplitEscrowError {
+    AlreadySettled,
+    AlreadyDeposited,
+    BalanceOverflow,
+    DuplicateMember,
+    GroupNotFound,
+    InvalidAmount,
+    InvalidDepositAmount,
+    InvalidDescription,
+    InvalidGroupName,
+    InvalidMemberCount,
+    MemberNotFound,
+    NotFullyFunded,
+    NotGroupMember,
+    SettlementAlreadyComputed,
+    SettlementIncomplete,
+    TokenIdOverflow,
+    TransferFailed,
+    PayoutAlreadyClaimed,
+    PayoutNotFound,
+}
+
 #[sails_rs::event]
-pub enum VaraSplitEvent {
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[codec(crate = sails_rs::scale_codec)]
+#[scale_info(crate = sails_rs::scale_info)]
+pub enum VaraSplitEscrowEvent {
     GroupCreated {
         group_id: GroupId,
         name: String,
@@ -90,156 +126,216 @@ pub enum VaraSplitEvent {
         amount: u128,
         description: String,
     },
-    GroupSettled {
+    SettlementComputed {
         group_id: GroupId,
         transfers: Vec<SettlementTransfer>,
         total_settled: u128,
     },
-    PaymentConfirmed {
+    DepositReceived {
         group_id: GroupId,
         from: ActorId,
-        to: ActorId,
+        amount: u128,
+    },
+    SettlementFinalized {
+        group_id: GroupId,
+        total_settled: u128,
+        token_id: TokenId,
+    },
+    InvoiceMinted {
+        token_id: TokenId,
+        group_id: GroupId,
+    },
+    PayoutDispatched {
+        token_id: TokenId,
+        creditor: ActorId,
+        amount: u128,
+    },
+    PayoutClaimed {
+        token_id: TokenId,
+        creditor: ActorId,
         amount: u128,
     },
 }
 
-pub struct VaraSplitService<'a> {
-    state: &'a RefCell<VaraSplitState>,
+pub struct VaraSplitEscrowService<'a> {
+    storage: &'a RefCell<EscrowStorage>,
 }
 
-impl<'a> VaraSplitService<'a> {
-    pub fn new(state: &'a RefCell<VaraSplitState>) -> Self {
-        Self { state }
+impl<'a> VaraSplitEscrowService<'a> {
+    pub fn new(storage: &'a RefCell<EscrowStorage>) -> Self {
+        Self { storage }
     }
 
-    fn ensure_unique_members(&self, members: Vec<ActorId>) -> Vec<ActorId> {
+    fn next_group_id(storage: &mut EscrowStorage) -> GroupId {
+        storage.group_id_counter = storage.group_id_counter.saturating_add(1);
+        storage.group_id_counter
+    }
+
+    fn next_token_id(storage: &mut EscrowStorage) -> Result<TokenId, VaraSplitEscrowError> {
+        let next = storage
+            .token_counter
+            .checked_add(1)
+            .ok_or(VaraSplitEscrowError::TokenIdOverflow)?;
+        storage.token_counter = next;
+        Ok(next)
+    }
+
+    fn ensure_unique_members(members: &[ActorId]) -> Result<(), VaraSplitEscrowError> {
         let mut seen = BTreeMap::<ActorId, ()>::new();
-        let mut unique = Vec::new();
 
         for member in members {
-            if seen.insert(member, ()).is_none() {
-                unique.push(member);
+            if seen.insert(*member, ()).is_some() {
+                return Err(VaraSplitEscrowError::DuplicateMember);
             }
         }
 
-        assert!(unique.len() >= 2, "A group must have at least two unique members");
-        unique
+        Ok(())
     }
 
-    fn group_view(id: GroupId, group: &Group) -> GroupView {
-        let balances = group
-            .members
+    fn ensure_member(group: &Group, member: ActorId) -> Result<(), VaraSplitEscrowError> {
+        if group.members.contains(&member) {
+            Ok(())
+        } else {
+            Err(VaraSplitEscrowError::NotGroupMember)
+        }
+    }
+
+    fn update_member_balance(
+        group: &mut Group,
+        member: ActorId,
+        change: i128,
+    ) -> Result<(), VaraSplitEscrowError> {
+        for entry in &mut group.balances {
+            if entry.member == member {
+                entry.balance = entry
+                    .balance
+                    .checked_add(change)
+                    .ok_or(VaraSplitEscrowError::BalanceOverflow)?;
+                return Ok(());
+            }
+        }
+
+        Err(VaraSplitEscrowError::MemberNotFound)
+    }
+
+    fn compute_transfers(group: &Group) -> Vec<SettlementTransfer> {
+        let mut creditors: Vec<(ActorId, i128)> = group
+            .balances
             .iter()
-            .map(|member| MemberBalance {
-                member: *member,
-                balance: *group.balances.get(member).unwrap_or(&0),
-            })
+            .filter_map(|entry| (entry.balance > 0).then_some((entry.member, entry.balance)))
             .collect();
 
-        GroupView {
-            id,
-            name: group.name.clone(),
-            members: group.members.clone(),
-            balances,
-            expenses: group.expenses.clone(),
-        }
-    }
-
-    fn amount_to_i128(amount: u128) -> i128 {
-        i128::try_from(amount).expect("Amount is too large")
-    }
-
-    fn assert_member(group: &Group, member: ActorId, reason: &str) {
-        assert!(group.members.contains(&member), "{reason}");
-    }
-
-    fn compute_settlement_transfers(group: &Group) -> Vec<SettlementTransfer> {
-        let mut debtors = Vec::<(ActorId, u128)>::new();
-        let mut creditors = Vec::<(ActorId, u128)>::new();
-
-        for member in &group.members {
-            let balance = *group.balances.get(member).unwrap_or(&0);
-            if balance < 0 {
-                debtors.push((*member, balance.unsigned_abs()));
-            } else if balance > 0 {
-                creditors.push((*member, balance as u128));
-            }
-        }
+        let mut debtors: Vec<(ActorId, i128)> = group
+            .balances
+            .iter()
+            .filter_map(|entry| (entry.balance < 0).then_some((entry.member, -entry.balance)))
+            .collect();
 
         let mut transfers = Vec::new();
-        let mut debtor_index = 0usize;
-        let mut creditor_index = 0usize;
+        let mut creditor_index = 0;
+        let mut debtor_index = 0;
 
-        while debtor_index < debtors.len() && creditor_index < creditors.len() {
-            let (from, debt) = debtors[debtor_index];
-            let (to, credit) = creditors[creditor_index];
-            let amount = debt.min(credit);
+        while creditor_index < creditors.len() && debtor_index < debtors.len() {
+            let (creditor, credit_amount) = creditors[creditor_index];
+            let (debtor, debt_amount) = debtors[debtor_index];
+            let amount = credit_amount.min(debt_amount) as u128;
 
             if amount > 0 {
-                transfers.push(SettlementTransfer { from, to, amount });
+                transfers.push(SettlementTransfer {
+                    from: debtor,
+                    to: creditor,
+                    amount,
+                });
             }
 
-            debtors[debtor_index].1 -= amount;
-            creditors[creditor_index].1 -= amount;
-
-            if debtors[debtor_index].1 == 0 {
+            if credit_amount > debt_amount {
+                creditors[creditor_index].1 -= debt_amount;
                 debtor_index += 1;
-            }
-
-            if creditors[creditor_index].1 == 0 {
+            } else if credit_amount < debt_amount {
+                debtors[debtor_index].1 -= credit_amount;
                 creditor_index += 1;
+            } else {
+                creditor_index += 1;
+                debtor_index += 1;
             }
         }
 
         transfers
     }
 
-    fn matching_transfer_amount(group: &Group, from: ActorId, to: ActorId) -> u128 {
-        VaraSplitService::compute_settlement_transfers(group)
-            .into_iter()
-            .find(|transfer| transfer.from == from && transfer.to == to)
-            .map(|transfer| transfer.amount)
-            .unwrap_or(0)
+    fn required_deposit_amount(group: &Group, member: ActorId) -> u128 {
+        group
+            .settlement_plan
+            .iter()
+            .filter(|transfer| transfer.from == member)
+            .fold(0u128, |total, transfer| total.saturating_add(transfer.amount))
+    }
+
+    fn ensure_funded(group: &Group) -> Result<(), VaraSplitEscrowError> {
+        for transfer in &group.settlement_plan {
+            let available = group.escrow.get(&transfer.from).copied().unwrap_or(0);
+            if available < transfer.amount {
+                return Err(VaraSplitEscrowError::NotFullyFunded);
+            }
+        }
+
+        Ok(())
     }
 }
 
-#[sails_rs::service(events = VaraSplitEvent)]
-impl VaraSplitService<'_> {
+#[sails_rs::service(events = VaraSplitEscrowEvent)]
+impl VaraSplitEscrowService<'_> {
     #[export]
-    pub fn create_group(&mut self, name: String, members: Vec<ActorId>) -> GroupView {
-        assert!(!name.trim().is_empty(), "Group name cannot be empty");
-
-        let members = self.ensure_unique_members(members);
-        let mut balances = BTreeMap::new();
-
-        for member in &members {
-            balances.insert(*member, 0);
+    pub fn create_group(
+        &mut self,
+        name: String,
+        mut members: Vec<ActorId>,
+    ) -> Result<Group, VaraSplitEscrowError> {
+        if name.trim().is_empty() {
+            return Err(VaraSplitEscrowError::InvalidGroupName);
         }
 
-        let mut state = self.state.borrow_mut();
-        let group_id = state.group_id_counter;
-        state.group_id_counter = state
-            .group_id_counter
-            .checked_add(1)
-            .expect("Group id overflow");
+        let caller = msg::source();
+        if !members.contains(&caller) {
+            members.push(caller);
+        }
+
+        if members.len() < 2 {
+            return Err(VaraSplitEscrowError::InvalidMemberCount);
+        }
+
+        VaraSplitEscrowService::ensure_unique_members(&members)?;
+
+        let mut storage = self.storage.borrow_mut();
+        let group_id = VaraSplitEscrowService::next_group_id(&mut storage);
+        let balances = members
+            .iter()
+            .map(|member| MemberBalance {
+                member: *member,
+                balance: 0,
+            })
+            .collect();
 
         let group = Group {
+            id: group_id,
             name: name.clone(),
             members: members.clone(),
             balances,
             expenses: Vec::new(),
+            escrow: BTreeMap::new(),
+            settlement_plan: Vec::new(),
+            settled: false,
         };
 
-        state.groups.insert(group_id, group.clone());
-
-        self.emit_event(VaraSplitEvent::GroupCreated {
+        storage.groups.insert(group_id, group.clone());
+        self.emit_event(VaraSplitEscrowEvent::GroupCreated {
             group_id,
             name,
             members,
         })
-        .expect("Failed to emit GroupCreated event");
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
 
-        VaraSplitService::group_view(group_id, &group)
+        Ok(group)
     }
 
     #[export]
@@ -249,50 +345,45 @@ impl VaraSplitService<'_> {
         payer: ActorId,
         amount: u128,
         description: String,
-    ) -> GroupView {
-        assert!(amount > 0, "Amount must be greater than zero");
-        assert!(!description.trim().is_empty(), "Description cannot be empty");
-
-        let caller = msg::source();
-        let amount_i128 = VaraSplitService::amount_to_i128(amount);
-
-        let mut state = self.state.borrow_mut();
-        let group = state.groups.get_mut(&group_id).expect("Group not found");
-        VaraSplitService::assert_member(group, caller, "Only group members can add expenses");
-        VaraSplitService::assert_member(group, payer, "Payer must be a group member");
-
-        let member_count = u128::try_from(group.members.len()).expect("Too many members");
-        let share_per_member = amount / member_count;
-        let remainder = amount % member_count;
-
-        for (index, member) in group.members.iter().enumerate() {
-            let extra = if u128::try_from(index).expect("Index overflow") < remainder {
-                1
-            } else {
-                0
-            };
-
-            let owed_share = share_per_member
-                .checked_add(extra)
-                .expect("Share overflow");
-            let owed_share_i128 = VaraSplitService::amount_to_i128(owed_share);
-            let balance = group
-                .balances
-                .get_mut(member)
-                .expect("Missing member balance entry");
-
-            *balance = balance
-                .checked_sub(owed_share_i128)
-                .expect("Balance underflow while splitting expense");
+    ) -> Result<Group, VaraSplitEscrowError> {
+        if amount == 0 {
+            return Err(VaraSplitEscrowError::InvalidAmount);
         }
 
-        let payer_balance = group
-            .balances
-            .get_mut(&payer)
-            .expect("Missing payer balance entry");
-        *payer_balance = payer_balance
-            .checked_add(amount_i128)
-            .expect("Balance overflow while crediting payer");
+        if description.trim().is_empty() {
+            return Err(VaraSplitEscrowError::InvalidDescription);
+        }
+
+        let mut storage = self.storage.borrow_mut();
+        let group = storage
+            .groups
+            .get_mut(&group_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+        if group.settled {
+            return Err(VaraSplitEscrowError::AlreadySettled);
+        }
+
+        VaraSplitEscrowService::ensure_member(group, payer)?;
+
+        let member_count = group.members.len() as u128;
+        if member_count == 0 {
+            return Err(VaraSplitEscrowError::InvalidMemberCount);
+        }
+
+        let share_per_member = amount / member_count;
+        let remainder = amount % member_count;
+        let members = group.members.clone();
+
+        for member in members {
+            let change = if member == payer {
+                let paid_share = amount.saturating_sub(share_per_member * (member_count - 1));
+                paid_share as i128
+            } else {
+                -(share_per_member as i128)
+            };
+            VaraSplitEscrowService::update_member_balance(group, member, change)?;
+        }
 
         group.expenses.push(Expense {
             payer,
@@ -303,144 +394,317 @@ impl VaraSplitService<'_> {
             created_at: exec::block_timestamp(),
         });
 
-        let view = VaraSplitService::group_view(group_id, group);
-
-        self.emit_event(VaraSplitEvent::ExpenseAdded {
+        let updated = group.clone();
+        self.emit_event(VaraSplitEscrowEvent::ExpenseAdded {
             group_id,
             payer,
             amount,
             description,
         })
-        .expect("Failed to emit ExpenseAdded event");
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
 
-        view
+        Ok(updated)
     }
 
     #[export]
-    pub fn get_group(&self, group_id: GroupId) -> GroupView {
-        let state = self.state.borrow();
-        let group = state.groups.get(&group_id).expect("Group not found");
-        VaraSplitService::group_view(group_id, group)
-    }
+    pub fn compute_settlement(
+        &mut self,
+        group_id: GroupId,
+    ) -> Result<Group, VaraSplitEscrowError> {
+        let mut storage = self.storage.borrow_mut();
+        let group = storage
+            .groups
+            .get_mut(&group_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
 
-    #[export]
-    pub fn get_balances(&self, group_id: GroupId) -> Vec<MemberBalance> {
-        self.get_group(group_id).balances
-    }
-
-    #[export]
-    pub fn get_settlement_plan(&self, group_id: GroupId) -> Vec<SettlementTransfer> {
-        let state = self.state.borrow();
-        let group = state.groups.get(&group_id).expect("Group not found");
-        VaraSplitService::compute_settlement_transfers(group)
-    }
-
-    #[export]
-    pub fn settle_group(&mut self, group_id: GroupId) -> GroupSettlement {
-        let caller = msg::source();
-        let mut state = self.state.borrow_mut();
-        let group = state.groups.get_mut(&group_id).expect("Group not found");
-        VaraSplitService::assert_member(group, caller, "Only group members can settle the group");
-
-        let transfers = VaraSplitService::compute_settlement_transfers(group);
-        let total_settled = transfers.iter().fold(0u128, |acc: u128, transfer| {
-            acc.checked_add(transfer.amount).expect("Settlement overflow")
-        });
-
-        for member in &group.members {
-            let balance = group
-                .balances
-                .get_mut(member)
-                .expect("Missing member balance entry");
-            *balance = 0;
+        if group.settled {
+            return Err(VaraSplitEscrowError::AlreadySettled);
         }
 
-        let settlement = GroupSettlement {
-            group_id,
-            transfers: transfers.clone(),
-            total_settled,
-        };
+        if !group.settlement_plan.is_empty() {
+            return Err(VaraSplitEscrowError::SettlementAlreadyComputed);
+        }
 
-        self.emit_event(VaraSplitEvent::GroupSettled {
+        let transfers = VaraSplitEscrowService::compute_transfers(group);
+        let total_settled = transfers
+            .iter()
+            .fold(0u128, |sum, transfer| sum.saturating_add(transfer.amount));
+        group.settlement_plan = transfers.clone();
+
+        let updated = group.clone();
+        self.emit_event(VaraSplitEscrowEvent::SettlementComputed {
             group_id,
             transfers,
             total_settled,
         })
-        .expect("Failed to emit GroupSettled event");
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
 
-        settlement
+        Ok(updated)
     }
 
     #[export]
-    pub fn confirm_payment(
-        &mut self,
-        group_id: GroupId,
-        from: ActorId,
-        to: ActorId,
-        amount: u128,
-    ) -> GroupView {
-        assert!(amount > 0, "Amount must be greater than zero");
-
+    pub fn deposit(&mut self, group_id: GroupId) -> Result<Group, VaraSplitEscrowError> {
         let caller = msg::source();
-        let amount_i128 = VaraSplitService::amount_to_i128(amount);
+        let amount = msg::value();
 
-        let mut state = self.state.borrow_mut();
-        let group = state.groups.get_mut(&group_id).expect("Group not found");
+        let mut storage = self.storage.borrow_mut();
+        let group = storage
+            .groups
+            .get_mut(&group_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
 
-        VaraSplitService::assert_member(group, from, "Sender must be a group member");
-        VaraSplitService::assert_member(group, to, "Recipient must be a group member");
-        assert_eq!(caller, from, "Only the sender can confirm payment");
+        if group.settled {
+            return Err(VaraSplitEscrowError::AlreadySettled);
+        }
 
-        let outstanding_amount = VaraSplitService::matching_transfer_amount(group, from, to);
-        assert!(outstanding_amount > 0, "No matching debt from sender to recipient");
-        assert!(
-            amount <= outstanding_amount,
-            "Confirmed amount exceeds outstanding debt"
-        );
+        VaraSplitEscrowService::ensure_member(group, caller)?;
 
-        let sender_balance = group
-            .balances
-            .get_mut(&from)
-            .expect("Missing sender balance entry");
-        *sender_balance = sender_balance
-            .checked_add(amount_i128)
-            .expect("Balance overflow while reducing sender debt");
+        if group.settlement_plan.is_empty() {
+            return Err(VaraSplitEscrowError::SettlementIncomplete);
+        }
 
-        let recipient_balance = group
-            .balances
-            .get_mut(&to)
-            .expect("Missing recipient balance entry");
-        *recipient_balance = recipient_balance
-            .checked_sub(amount_i128)
-            .expect("Balance underflow while reducing recipient credit");
+        let required = VaraSplitEscrowService::required_deposit_amount(group, caller);
+        if required == 0 || amount != required {
+            return Err(VaraSplitEscrowError::InvalidDepositAmount);
+        }
 
-        let view = VaraSplitService::group_view(group_id, group);
+        if group.escrow.get(&caller).copied().unwrap_or(0) > 0 {
+            return Err(VaraSplitEscrowError::AlreadyDeposited);
+        }
 
-        self.emit_event(VaraSplitEvent::PaymentConfirmed {
+        group.escrow.insert(caller, amount);
+
+        let updated = group.clone();
+        self.emit_event(VaraSplitEscrowEvent::DepositReceived {
             group_id,
-            from,
-            to,
+            from: caller,
             amount,
         })
-        .expect("Failed to emit PaymentConfirmed event");
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
 
-        view
+        Ok(updated)
+    }
+
+    #[export]
+    pub fn finalize_settlement(
+        &mut self,
+        group_id: GroupId,
+        finalize_block: u32,
+        finalize_extrinsic_index: u32,
+    ) -> Result<InvoiceNFT, VaraSplitEscrowError> {
+        let mut storage = self.storage.borrow_mut();
+        let (settlement_plan, payouts) = {
+            let group = storage
+                .groups
+                .get_mut(&group_id)
+                .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+            if group.settled {
+                return Err(VaraSplitEscrowError::AlreadySettled);
+            }
+
+            if group.settlement_plan.is_empty() {
+                return Err(VaraSplitEscrowError::SettlementIncomplete);
+            }
+
+            VaraSplitEscrowService::ensure_funded(group)?;
+            let settlement_plan = group.settlement_plan.clone();
+            let mut payouts = Vec::new();
+
+            for transfer in &settlement_plan {
+                let from_balance = group.escrow.get(&transfer.from).copied().unwrap_or(0);
+                group.escrow.insert(transfer.from, from_balance - transfer.amount);
+                payouts.push(PayoutRecord {
+                    creditor: transfer.to,
+                    amount: transfer.amount,
+                    claimed: false,
+                });
+            }
+
+            group.settled = true;
+            group.settlement_plan.clear();
+            group.escrow.clear();
+            for balance in &mut group.balances {
+                balance.balance = 0;
+            }
+
+            (settlement_plan, payouts)
+        };
+
+        let total_settled = settlement_plan
+            .iter()
+            .fold(0u128, |sum, transfer| sum.saturating_add(transfer.amount));
+        let token_id = VaraSplitEscrowService::next_token_id(&mut storage)?;
+        let invoice = InvoiceNFT {
+            token_id,
+            group_id,
+            transfers: settlement_plan,
+            total_settled,
+            settled_at: exec::block_timestamp(),
+            finalize_block,
+            finalize_extrinsic_index,
+            payouts: payouts.clone(),
+        };
+
+        storage.invoice_by_group.insert(group_id, token_id);
+        storage.invoice_nfts.insert(token_id, invoice.clone());
+
+        self.emit_event(VaraSplitEscrowEvent::SettlementFinalized {
+            group_id,
+            total_settled,
+            token_id,
+        })
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
+        self.emit_event(VaraSplitEscrowEvent::InvoiceMinted { token_id, group_id })
+            .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
+        for payout in payouts {
+            self.emit_event(VaraSplitEscrowEvent::PayoutDispatched {
+                token_id,
+                creditor: payout.creditor,
+                amount: payout.amount,
+            })
+            .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
+        }
+
+        Ok(invoice)
+    }
+
+    #[export]
+    pub fn claim_payout(&mut self, token_id: TokenId) -> Result<InvoiceNFT, VaraSplitEscrowError> {
+        let caller = msg::source();
+        let mut storage = self.storage.borrow_mut();
+        let invoice = storage
+            .invoice_nfts
+            .get_mut(&token_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+        let payout = invoice
+            .payouts
+            .iter_mut()
+            .find(|payout| payout.creditor == caller)
+            .ok_or(VaraSplitEscrowError::PayoutNotFound)?;
+
+        if payout.claimed {
+            return Err(VaraSplitEscrowError::PayoutAlreadyClaimed);
+        }
+
+        payout.claimed = true;
+        let amount = payout.amount;
+        msg::send(caller, (), amount).map_err(|_| {
+            payout.claimed = false;
+            VaraSplitEscrowError::TransferFailed
+        })?;
+
+        let updated = invoice.clone();
+        self.emit_event(VaraSplitEscrowEvent::PayoutClaimed {
+            token_id,
+            creditor: caller,
+            amount,
+        })
+        .map_err(|_| VaraSplitEscrowError::TransferFailed)?;
+
+        Ok(updated)
+    }
+
+    #[export]
+    pub fn record_finalize_reference(
+        &mut self,
+        token_id: TokenId,
+        finalize_block: u32,
+        finalize_extrinsic_index: u32,
+    ) -> Result<InvoiceNFT, VaraSplitEscrowError> {
+        if finalize_block == 0 {
+            return Err(VaraSplitEscrowError::InvalidAmount);
+        }
+
+        let mut storage = self.storage.borrow_mut();
+        let invoice = storage
+            .invoice_nfts
+            .get_mut(&token_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+        if invoice.finalize_block != 0 {
+            if invoice.finalize_block == finalize_block
+                && invoice.finalize_extrinsic_index == finalize_extrinsic_index
+            {
+                return Ok(invoice.clone());
+            }
+
+            return Err(VaraSplitEscrowError::AlreadySettled);
+        }
+
+        invoice.finalize_block = finalize_block;
+        invoice.finalize_extrinsic_index = finalize_extrinsic_index;
+        Ok(invoice.clone())
+    }
+
+    #[export]
+    pub fn get_group(&self, group_id: GroupId) -> Result<Group, VaraSplitEscrowError> {
+        let storage = self.storage.borrow();
+        storage
+            .groups
+            .get(&group_id)
+            .cloned()
+            .ok_or(VaraSplitEscrowError::GroupNotFound)
+    }
+
+    #[export]
+    pub fn get_settlement_plan(
+        &self,
+        group_id: GroupId,
+    ) -> Result<Vec<SettlementTransfer>, VaraSplitEscrowError> {
+        let storage = self.storage.borrow();
+        let group = storage
+            .groups
+            .get(&group_id)
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+        Ok(group.settlement_plan.clone())
+    }
+
+    #[export]
+    pub fn get_invoice(&self, group_id: GroupId) -> Result<InvoiceNFT, VaraSplitEscrowError> {
+        let storage = self.storage.borrow();
+        let token_id = storage
+            .invoice_by_group
+            .get(&group_id)
+            .copied()
+            .ok_or(VaraSplitEscrowError::GroupNotFound)?;
+
+        storage
+            .invoice_nfts
+            .get(&token_id)
+            .cloned()
+            .ok_or(VaraSplitEscrowError::GroupNotFound)
+    }
+
+    #[export]
+    pub fn get_invoice_by_token(
+        &self,
+        token_id: TokenId,
+    ) -> Result<InvoiceNFT, VaraSplitEscrowError> {
+        let storage = self.storage.borrow();
+        storage
+            .invoice_nfts
+            .get(&token_id)
+            .cloned()
+            .ok_or(VaraSplitEscrowError::GroupNotFound)
     }
 }
 
 pub struct Program {
-    state: RefCell<VaraSplitState>,
+    storage: RefCell<EscrowStorage>,
 }
 
 #[sails_rs::program]
 impl Program {
     pub fn create() -> Self {
         Self {
-            state: RefCell::new(VaraSplitState::default()),
+            storage: RefCell::new(EscrowStorage::default()),
         }
     }
 
-    pub fn vara_split(&self) -> VaraSplitService<'_> {
-        VaraSplitService::new(&self.state)
+    pub fn vara_split_escrow(&self) -> VaraSplitEscrowService<'_> {
+        VaraSplitEscrowService::new(&self.storage)
     }
 }

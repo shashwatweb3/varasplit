@@ -1,10 +1,19 @@
+import { normalizeActorId } from './format';
+
 const RECENT_GROUPS_KEY = 'varasplit.recent-groups';
+const RECENT_WORK_PAYOUTS_KEY = 'varasplit.recent-work-payouts';
 const MEMBER_NAMES_KEY = 'varasplit.member-names';
 const CONNECTED_ACCOUNT_KEY = 'varasplit.connected-account';
+const ACTION_CENTER_REFRESH_EVENT = 'varasplit:action-center-refresh';
 
 export interface RecentGroup {
   id: number;
   name: string;
+}
+
+export interface RecentWorkPayout {
+  id: number;
+  title: string;
 }
 
 interface StoredAccount {
@@ -23,8 +32,9 @@ export function saveRecentGroup(groupId: number, groupName?: string) {
     id: groupId,
     name: groupName?.trim() || current.find((item) => item.id === groupId)?.name || `Group #${groupId}`,
   };
-  const next = [nextEntry, ...current.filter((item) => item.id !== groupId)].slice(0, 5);
+  const next = [nextEntry, ...current.filter((item) => item.id !== groupId)].slice(0, 50);
   window.localStorage.setItem(RECENT_GROUPS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
 }
 
 export function loadRecentGroups(): RecentGroup[] {
@@ -62,11 +72,60 @@ export function loadRecentGroups(): RecentGroup[] {
   }
 }
 
+export function saveRecentWorkPayout(payoutId: number, title?: string) {
+  if (typeof window === 'undefined') return;
+
+  const current = loadRecentWorkPayouts();
+  const nextEntry: RecentWorkPayout = {
+    id: payoutId,
+    title: title?.trim() || current.find((item) => item.id === payoutId)?.title || `Payout #${payoutId}`,
+  };
+  const next = [nextEntry, ...current.filter((item) => item.id !== payoutId)].slice(0, 50);
+  window.localStorage.setItem(RECENT_WORK_PAYOUTS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(ACTION_CENTER_REFRESH_EVENT));
+}
+
+export function loadRecentWorkPayouts(): RecentWorkPayout[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(RECENT_WORK_PAYOUTS_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.flatMap((item) => {
+      if (typeof item === 'number') {
+        return [{ id: item, title: `Payout #${item}` }];
+      }
+
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        'id' in item &&
+        typeof item.id === 'number' &&
+        'title' in item &&
+        typeof item.title === 'string'
+      ) {
+        return [{ id: item.id, title: item.title }];
+      }
+
+      return [];
+    });
+  } catch {
+    return [];
+  }
+}
+
 export function saveMemberName(address: string, name: string) {
   if (typeof window === 'undefined') return;
 
+  const trimmedName = name.trim();
+  if (!trimmedName) return;
+
   const current = loadMemberNames();
-  current[address] = name;
+  current[memberNameKey(address)] = trimmedName;
   window.localStorage.setItem(MEMBER_NAMES_KEY, JSON.stringify(current));
 }
 
@@ -78,10 +137,21 @@ export function loadMemberNames(): Record<string, string> {
     if (!raw) return {};
 
     const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, string> : {};
+    if (typeof parsed !== 'object' || parsed === null) return {};
+
+    return Object.entries(parsed as Record<string, unknown>).reduce<Record<string, string>>((acc, [address, name]) => {
+      if (typeof name !== 'string' || !name.trim()) return acc;
+      acc[memberNameKey(address)] = name.trim();
+      return acc;
+    }, {});
   } catch {
     return {};
   }
+}
+
+export function getMemberName(address: string, names?: Record<string, string>) {
+  const source = names ?? loadMemberNames();
+  return source[memberNameKey(address)] ?? '';
 }
 
 export function saveConnectedAccount(account: StoredAccount) {
@@ -128,8 +198,17 @@ export function clearMemberName(address: string) {
   if (typeof window === 'undefined') return;
 
   const current = loadMemberNames();
-  if (!current[address]) return;
+  const key = memberNameKey(address);
+  if (!current[key]) return;
 
-  delete current[address];
+  delete current[key];
   window.localStorage.setItem(MEMBER_NAMES_KEY, JSON.stringify(current));
+}
+
+function memberNameKey(address: string) {
+  try {
+    return normalizeActorId(address);
+  } catch {
+    return address.trim();
+  }
 }
